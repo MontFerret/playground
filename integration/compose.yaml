@@ -1,0 +1,30 @@
+services:
+  api:
+    environment:
+      PLAYGROUND_MAX_EXECUTION_TIMEOUT: 30s
+      PLAYGROUND_WRITE_TIMEOUT: 35s
+      PLAYGROUND_SHUTDOWN_TIMEOUT: 5s
+      PLAYGROUND_CLEANUP_TIMEOUT: 4s
+  browser:
+    command: ["--ignore-certificate-errors-spki-list=${FIXTURE_SPKI:?}", "--disable-popup-blocking"]
+  egress:
+    # Exercise the production DNS and CONNECT path on a disconnected subnet.
+    # This address belongs only to the fixture inside the isolated test network.
+    extra_hosts: ["mockery.ferretlang.org=185.199.108.153", "forbidden.test=185.199.108.153"]
+    networks: !override [control, fixture]
+  fixture:
+    image: python:3.13-alpine
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    sysctls: {net.ipv4.ip_unprivileged_port_start: 0}
+    volumes:
+      - ./integration/fixture.py:/fixture.py:ro
+      - ${FIXTURE_TLS:?}:/tls:ro
+    entrypoint: ["python", "-B", "/fixture.py"]
+    networks:
+      fixture: {ipv4_address: 185.199.108.153}
+networks:
+  fixture:
+    internal: true
+    ipam: {config: [{subnet: 185.199.108.144/28}]}

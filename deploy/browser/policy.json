@@ -1,0 +1,7 @@
+{
+  "URLBlocklist": ["*"],
+  "URLAllowlist": ["https://.mockery.ferretlang.org:443", "about:blank"],
+  "DownloadRestrictions": 3,
+  "AllowFileSelectionDialogs": false,
+  "DnsOverHttpsMode": "off"
+}

@@ -12,7 +12,7 @@ Do not reproduce Ferret's parser, compiler, or serializer test suites here.
 Cover positive, negative, boundary, concurrency, cancellation, and cleanup cases
 meaningfully. Prefer regression tests that fail without the fix. Use local HTTP
 servers, controlled modules, and explicit synchronization rather than timing
-assumptions. Tests must not require browsers, cloud credentials, or public
+assumptions. Fast Go tests must not require browsers, cloud credentials, or public
 network access after dependencies have been downloaded.
 
 ## Commands
@@ -27,7 +27,7 @@ Start with `go test ./internal/<owning-package>`, then broaden according to risk
 - `make vet` runs static checks; `make test-race` runs tests with race detection.
 - `make build` builds the executable; `make run` starts it locally.
 - `make check` runs the formatting, static, contract, test, race, and build checks
-  used by `.github/workflows/build.yml` on Go 1.25.x and 1.27.x.
+  used by `.github/workflows/build.yml` on the Go version in go.mod.
 
 Complete the [mandatory self-review](../../../AGENTS.md#mandatory-final-self-review)
 after initial validation, fix actual findings, and rerun affected checks.
@@ -76,3 +76,11 @@ borrowed chunks. Compare known and unknown lengths with the same byte limit.
 ```sh
 go test ./internal/runtimehost -run '^$' -bench '^BenchmarkFragmentedOutput$' -benchmem -benchtime=300ms -count=3
 ```
+
+## Packaged deployment
+
+`make integration` runs browser fixtures through the packaged HTTP service.
+`make release-snapshot` builds and imports the GoReleaser OCI archive before
+running that same suite. Both require native Linux/amd64 and a working
+unprivileged Chromium sandbox. See [deployment guidance](../../deployment.md).
+These targets are separate from fast Go tests.

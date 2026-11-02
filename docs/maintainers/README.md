@@ -7,6 +7,8 @@
 - [HTTP contract and operation behavior](../http-contract.md)
 - [Formatter regression history and verified fixes](../upstream-formatter-blockers.md)
 - [Local development](../../README.md)
+- [Packaged deployment and enforcement](../deployment.md)
+- [Release setup and recovery](../releasing.md)
 
 The agent workflow is in [AGENTS.md](../../AGENTS.md). These guides adapt the
 corresponding Ferret engineering guidance from revision

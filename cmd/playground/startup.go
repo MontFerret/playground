@@ -29,7 +29,15 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 
-	host, err := runtimehost.New()
+	var host *runtimehost.Host
+	if cfg.CDPOrigin != "" {
+		probe, cancel := context.WithTimeout(ctx, cfg.CleanupTimeout)
+		host, err = runtimehost.NewWithBrowser(probe, cfg.CDPOrigin, cfg.CleanupTimeout)
+		cancel()
+	} else {
+		host, err = runtimehost.New()
+	}
+
 	if err != nil {
 		return fmt.Errorf("initialize runtime: %w", err)
 	}

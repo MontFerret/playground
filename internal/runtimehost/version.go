@@ -7,12 +7,18 @@ import (
 )
 
 func dependencyVersion(info *debug.BuildInfo) *api.Version {
+	v := moduleVersion(info, "github.com/MontFerret/ferret/v2")
+
+	return (*api.Version)(v)
+}
+
+func moduleVersion(info *debug.BuildInfo, path string) *string {
 	if info == nil {
 		return nil
 	}
 
 	for _, dependency := range info.Deps {
-		if dependency.Path != "github.com/MontFerret/ferret/v2" {
+		if dependency.Path != path {
 			continue
 		}
 
@@ -24,7 +30,7 @@ func dependencyVersion(info *debug.BuildInfo) *api.Version {
 			return nil
 		}
 
-		version := api.Version(dependency.Version)
+		version := dependency.Version
 
 		return &version
 	}

@@ -36,7 +36,8 @@ type (
 	}
 
 	ExecutionLimits struct {
-		MaxTimeoutMs   float64 `json:"maxTimeoutMs"`
-		MaxOutputBytes int     `json:"maxOutputBytes"`
+		MaxConcurrentExecutions int     `json:"maxConcurrentExecutions"`
+		MaxTimeoutMs            float64 `json:"maxTimeoutMs"`
+		MaxOutputBytes          int     `json:"maxOutputBytes"`
 	}
 )

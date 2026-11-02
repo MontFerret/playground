@@ -105,6 +105,11 @@ func (h *Host) Execute(ctx context.Context, src playground.Source, options playg
 	}
 
 	executing := time.Now()
+	if h.browser != nil {
+		browserCtx, run := h.browser.Execution(ctx)
+		ctx = browserCtx
+		defer closeOwned(run)
+	}
 	session, err := plan.NewSession(ctx, engine.WithSessionRuntimeParams(params), engine.WithOutputContentType(ferretjson.ContentType))
 	if session != nil {
 		defer closeOwned(session)

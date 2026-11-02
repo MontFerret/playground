@@ -46,6 +46,9 @@ func NewServer(cfg config.Config, handler http.Handler, logger *slog.Logger) *Se
 // expiry forces connections closed and returns the drain error. Its shutdown
 // context is independent of the canceled serving context.
 func (s *Server) Serve(ctx context.Context, listener net.Listener) (resultErr error) {
+	requests, cancelRequests := context.WithCancel(context.Background())
+	defer cancelRequests()
+	s.http.BaseContext = func(net.Listener) context.Context { return requests }
 	defer listener.Close()
 	defer func() {
 		resultErr = errors.Join(resultErr, s.http.Close())
@@ -68,10 +71,14 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) (resultErr er
 
 		return fmt.Errorf("serve HTTP: %w", err)
 	case <-ctx.Done():
+		if handler, ok := s.http.Handler.(interface{ BeginDrain() }); ok {
+			handler.BeginDrain()
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
 		defer cancel()
 
 		if err := s.http.Shutdown(shutdownCtx); err != nil {
+			cancelRequests()
 			return fmt.Errorf("drain HTTP: %w", err)
 		}
 

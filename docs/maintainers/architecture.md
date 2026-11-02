@@ -29,8 +29,10 @@ through UAPI or duplicate Ferret implementation details.
 
 Startup validates configuration, constructs an immutable native formatter with
 default options before acquiring the native engine, opens the listener,
-and begins serving. The engine uses `ferret.New` with `stdlib.Safe()` and no
-optional modules. The selected profile label and construction option live
+and begins serving. The engine uses `ferret.New` with `stdlib.Safe()`.
+Browser-free startup registers no optional modules.
+Hosted startup composes a restricted HTML module from the same registration
+entries used for environment metadata. The selected profile label and construction option live
 together. Optional-module metadata is constructed from the same registration
 entries passed to the engine; module versions, when available, are supplied
 beside that registration. Native initialization rollback owns already-acquired
@@ -49,7 +51,8 @@ The host never executes a query during construction or discovery. Ferret's
 default filesystem is disabled when no root is configured; its default network
 service construction does not issue a request. Safe standard-library selection
 excludes IO functions. Programs share the service process and its memory budget.
-No request can configure these host services.
+No request can configure these host services. Native HTTP is explicitly denied
+through the engine network service. Runtime logging is discarded.
 
 Capabilities are owned by working HTTP behavior. Environment discovery, analysis,
 formatting, compilation, and execution are enabled.
@@ -62,7 +65,7 @@ the same validated settings used for enforcement.
 Analysis and compilation share one Engine.Compile path against the initialized
 host. Analysis uses full optimization and renders no artifacts. Compilation uses
 explicit native per-plan options. The compiler does not bind host functions or
-parameter values in alpha.60.
+parameter values in alpha.61.
 Analysis and compilation both finish without creating a session.
 
 The temporary plan owns the compiled program. Parameter metadata uses Plan.Params
@@ -122,8 +125,8 @@ listener binding fails. The server owns its listener and connections; it borrows
 the handler. The handler borrows the host. Environment methods only copy immutable
 metadata and acquire no native descendants.
 
-Serving cancellation stops admission and drains HTTP using a fresh bounded
-context. If the drain expires, close connections and report the error. After
+Serving cancellation closes HTTP admission, drains HTTP using a fresh bounded
+context, then cancels request contexts when the drain expires. If the drain expires, close connections and report the error. After
 HTTP serving ends, close the host under a separate fresh bounded context,
 joining serving and cleanup failures. Defaults permit five seconds for each
 phase. Do not derive cleanup contexts from canceled serving contexts.
@@ -143,7 +146,7 @@ settled.
 
 ## Upstream integration gaps
 
-Verified against Ferret `v2.0.0-alpha.60` and API `v1.0.0-alpha.21`.
+Verified against Ferret `v2.0.0-alpha.61` and API `v1.0.0-alpha.21`.
 
 - Native `Engine` has no release-version query. UAPI `New`/`Wrap` require the host
   to supply the opaque Core version. Dependency build metadata is the source
@@ -170,3 +173,25 @@ The [HTTP guide](../http-contract.md) records the boundary behavior that future
 operation implementations must uphold. Public request data never controls host
 configuration, and transport-independent code should remain usable by a future
 WASM adapter.
+
+## Hosted browser
+
+The host borrows the Compose-owned CDP service. Each execution lazily owns a
+browser context and a separate owner connection with dispose-on-detach enabled.
+Page managers own separate CDP connections, so closing one page preserves its
+siblings. After output and native session cleanup, the browser execution closes
+pages and disposes its context, including popup targets. A fresh cleanup deadline
+disconnects page transports to bound upstream background CDP calls. Host work
+remains admitted through this cleanup. The HTTP slot wraps the entire operation.
+
+The module registers upstream DOCUMENT only. A run-local driver container carries
+the owned browser execution. Host policy rejects cookie reuse, parse, arbitrary
+drivers and document host settings. The deployment owns the Chromium profile,
+kernel egress rules, manual proxy, and privileged-scheme navigation restrictions.
+See [deployment enforcement](../deployment.md).
+
+The pinned HTML module starts its navigation subscription after Page.navigate,
+which can miss completion on fast local pages. The host's initial page setup
+subscribes to lifecycle events first, navigates once, and matches the committed
+loader's load event before handing the existing document to the upstream loader.
+This avoids replaying a navigation or changing module/language semantics.

@@ -1,6 +1,6 @@
 # Native formatter regression history
 
-The playground enables `POST /api/v1/format` with Ferret `v2.0.0-alpha.60`.
+The playground enables `POST /api/v1/format` with Ferret `v2.0.0-alpha.61`.
 Alpha.59 fixed the Unicode and panic failures recorded below. Alpha.60 fixed
 both literal-preservation failures. The native formatter preserves the literal
 body and keeps its original delimiter when changing quotes would alter the

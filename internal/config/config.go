@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,9 @@ import (
 // Config contains validated service settings. Environment overrides defaults;
 // explicitly empty values are invalid rather than interpreted as unset.
 type Config struct {
+	CDPOrigin               string
+	AllowedOrigins          []string
+	MaxConcurrentExecutions int
 	ListenAddr              string
 	ReadHeaderTimeout       time.Duration
 	ReadTimeout             time.Duration
@@ -34,6 +38,8 @@ type Config struct {
 // listeners or runtime resources. Errors identify settings, not their contents.
 func Load(lookup func(string) (string, bool)) (Config, error) {
 	cfg := Config{
+		MaxConcurrentExecutions: 2,
+		AllowedOrigins:          []string{"https://ferretlang.org"},
 		ListenAddr:              "127.0.0.1:8080",
 		ReadHeaderTimeout:       5 * time.Second,
 		ReadTimeout:             10 * time.Second,
@@ -49,6 +55,22 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		MaxExecutionTimeout:     5 * time.Second,
 		MaxOutputBytes:          1 << 20,
 		MaxResponseBytes:        2 << 20,
+	}
+
+	if value, ok := lookup("PLAYGROUND_CDP_ORIGIN"); ok {
+		if !validOrigin(value) || !strings.HasPrefix(value, "http://") {
+			return Config{}, fmt.Errorf("PLAYGROUND_CDP_ORIGIN: expected a private HTTP origin")
+		}
+		cfg.CDPOrigin = value
+	}
+
+	if value, ok := lookup("PLAYGROUND_ALLOWED_ORIGINS"); ok {
+		cfg.AllowedOrigins = strings.Split(value, ",")
+		for _, origin := range cfg.AllowedOrigins {
+			if !validOrigin(origin) {
+				return Config{}, fmt.Errorf("PLAYGROUND_ALLOWED_ORIGINS: expected comma-separated exact HTTP(S) origins")
+			}
+		}
 	}
 
 	if value, ok := lookup("PLAYGROUND_LISTEN_ADDR"); ok {
@@ -112,6 +134,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		target  *int
 		minimum int
 	}{
+		{"PLAYGROUND_MAX_CONCURRENT_EXECUTIONS", &cfg.MaxConcurrentExecutions, 1},
 		{"PLAYGROUND_MAX_REQUEST_BODY_BYTES", &cfg.MaxRequestBodyBytes, 1},
 		{"PLAYGROUND_MAX_OUTPUT_BYTES", &cfg.MaxOutputBytes, 1},
 		{"PLAYGROUND_MAX_SOURCE_BYTES", &cfg.MaxSourceBytes, 1},
@@ -162,5 +185,17 @@ func validListenHost(host string) bool {
 		}
 	}
 
+	return true
+}
+
+func validOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || !validListenHost(u.Hostname()) || origin != u.Scheme+"://"+u.Host || strings.HasSuffix(u.Host, ":") {
+		return false
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.ParseUint(port, 10, 16)
+		return err == nil && n > 0
+	}
 	return true
 }

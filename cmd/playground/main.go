@@ -14,7 +14,7 @@ func main() {
 	err := run(ctx, logger)
 	stop()
 	if err != nil {
-		logger.Error("Service failed", "error", err)
+		logger.Error("Service failed", "code", "service_failure")
 		os.Exit(1)
 	}
 }

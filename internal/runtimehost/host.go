@@ -4,20 +4,24 @@ package runtimehost
 import (
 	"context"
 	"errors"
+	"io"
 	"runtime/debug"
 	"sync"
 
 	"github.com/MontFerret/ferret/v2"
 	"github.com/MontFerret/ferret/v2/pkg/formatter"
 	"github.com/MontFerret/ferret/v2/pkg/module"
+	ferretnet "github.com/MontFerret/ferret/v2/pkg/net"
 	"github.com/MontFerret/ferret/v2/pkg/stdlib"
 
+	"github.com/MontFerret/playground/internal/browser"
 	"github.com/MontFerret/playground/internal/playground"
 )
 
 type (
 	// Host owns its engine. Close it after all users of the host have settled.
 	Host struct {
+		browser     *browser.Browser
 		engine      *ferret.Engine
 		formatter   *formatter.Formatter
 		description playground.Runtime
@@ -126,7 +130,7 @@ func newHost(registrations []registration, info *debug.BuildInfo) (*Host, error)
 
 	// The profile label is owned beside the option that establishes it. Module
 	// descriptions are produced from the same entries passed to construction.
-	engine, err := ferret.New(ferret.WithStdlib(stdlib.Safe()), ferret.WithModules(modules...))
+	engine, err := ferret.New(ferret.WithLog(io.Discard), ferret.WithNetworkOptions(ferretnet.WithHTTPClient(disabledHTTP{})), ferret.WithStdlib(stdlib.Safe()), ferret.WithModules(modules...))
 	if err != nil {
 		return nil, err
 	}

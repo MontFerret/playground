@@ -4,10 +4,29 @@ A Go REST service for analyzing, formatting, compiling, and executing FQL with F
 Compilation can return disassembled bytecode and referenced parameters. Use the
 environment endpoint to discover the runtime version, capabilities, and limits.
 
+## Packaged deployment
+
+On native Linux/amd64 with Docker Compose v2.24.4 or later, run:
+
+```sh
+make up
+```
+
+This starts the API, sandboxed Chromium, private relay, and restricted egress proxy.
+Only the API port is published. [Deployment and examples](docs/deployment.md)
+covers host prerequisites, resource limits, browser ownership, and the product demo.
+[Release setup and recovery](docs/releasing.md) covers the two registries.
+
+```sh
+make integration       # private fixtures, actual development API image
+make release-snapshot  # GoReleaser OCI archive, actual release entry point
+make down
+```
+
 ## Run locally
 
-Requires Go 1.25 or newer and Make. Dependencies are pinned to Ferret
-`v2.0.0-alpha.60` and Universal API `v1.0.0-alpha.21`. Both declare Go 1.25.
+Requires Go 1.27 or newer and Make. Dependencies are pinned to Ferret
+`v2.0.0-alpha.61` and Universal API `v1.0.0-alpha.21`. The service minimum is owned by go.mod.
 There is no browser, credential, Node.js, or external service requirement.
 
 ```sh
@@ -31,7 +50,7 @@ Example response when service build-version metadata is unavailable:
   "service": {"name": "ferret-playground", "version": null},
   "runtime": {
     "name": "ferret",
-    "version": "v2.0.0-alpha.60",
+    "version": "v2.0.0-alpha.61",
     "standardLibrary": "safe",
     "modules": []
   },
@@ -57,15 +76,17 @@ Example response when service build-version metadata is unavailable:
       "writeTimeoutMs": 15000,
       "idleTimeoutMs": 60000
     },
-    "execution": {"maxTimeoutMs": 5000, "maxOutputBytes": 1048576},
+    "execution": {"maxConcurrentExecutions": 2, "maxTimeoutMs": 5000, "maxOutputBytes": 1048576},
     "tooling": {"maxSourceBytes": 65536, "maxBytecodeBytes": 1048576, "maxFormattedSourceBytes": 1048576}
   }
 }
 ```
 
 The service constructs a real native engine with `stdlib.Safe()`, which excludes
-filesystem and network standard-library groups. No optional modules are
-registered. Environment requests read detached metadata; they do not evaluate
+filesystem and network standard-library groups. Browser-free startup registers
+no optional modules. The packaged deployment registers the restricted HTML
+surface described in [deployment guidance](docs/deployment.md). Environment
+requests read detached metadata; they do not evaluate
 FQL, launch browsers, or make external requests. The standard-library profile
 controls function availability. Execution shares the service process.
 
@@ -84,6 +105,9 @@ configuration flags. Validate all settings before acquiring runtime resources.
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `PLAYGROUND_MAX_CONCURRENT_EXECUTIONS` | `2` | Non-queued HTTP execution slots, held through cleanup |
+| `PLAYGROUND_ALLOWED_ORIGINS` | `https://ferretlang.org` | Comma-separated exact CORS origins |
+| `PLAYGROUND_CDP_ORIGIN` | unset | Operator-owned private HTTP CDP origin, enables hosted HTML |
 | `PLAYGROUND_LISTEN_ADDR` | `127.0.0.1:8080` | TCP host:port; port 0 selects an available port |
 | `PLAYGROUND_READ_HEADER_TIMEOUT` | `5s` | Time allowed to read request headers |
 | `PLAYGROUND_READ_TIMEOUT` | `10s` | Time allowed to read a complete request |
@@ -149,8 +173,8 @@ contain no body. Application errors share a stable envelope:
 See the [OpenAPI contract](api/openapi.yaml) and
 [HTTP behavior guide](docs/http-contract.md) for strict request decoding,
 program outcomes, diagnostic coordinates, output presence, and HTTP errors.
-There is no HTTP streaming, debugger session, function catalog, rate limiter,
-frontend, WASM adapter, or deployment profile.
+Execution admission has a configurable concurrency cap. The packaged browser,
+network policy, and CORS settings are described in [deployment guidance](docs/deployment.md).
 
 ### Analyze and inspect
 
@@ -234,7 +258,7 @@ Failed and invalid responses omit `output`.
 
 The earliest request, server, or client deadline applies through output
 consumption. Native compiler phases, host functions that ignore cancellation,
-and synchronous cleanup can delay completion. Ferret alpha.60 materializes
+and synchronous cleanup can delay completion. Ferret alpha.61 materializes
 encoded output during the run. The result limit bounds bytes retained for
 delivery. VM memory and native encoder allocations can exceed that limit.
 
@@ -250,7 +274,7 @@ Individual targets are `build`, `run`, `test`, `fmt`, `fmt-check`, `vet`,
 and builds the executable in ignored `bin/`. Contract checks use
 `kin-openapi v0.133.0` only in tests, validating schemas, examples, and actual
 handler responses without fetching external references. CI runs these same
-checks on Go 1.25.x and 1.27.x.
+checks on the Go version declared in go.mod.
 
 Tests use loopback listeners and controlled modules; after downloading Go
 dependencies, they need no public network access, Chromium, or credentials.

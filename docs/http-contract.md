@@ -10,7 +10,9 @@ compilation, and execution.
 and effective limits. `/api/v1/analyze`, `/api/v1/format`, `/api/v1/compile`, and `/api/v1/execute` accept POST. Other
 methods on these exact paths receive `405/method_not_allowed` and `Allow`.
 Unavailable and unknown paths receive `404/not_found`. HEAD suppresses response
-bodies. There are no trailing-slash redirects or CORS policy.
+bodies. Configured origins receive exact-origin CORS headers on success and error responses.
+Preflight OPTIONS validates the route method and Content-Type request header.
+Responses vary on Origin, and preflight also varies on the requested method and headers.
 
 Application responses use `application/json` and `X-Content-Type-Options: nosniff`.
 Errors contain only `error.code` and `error.message`. No raw dependency error,
@@ -21,6 +23,8 @@ are returned only in invalid-program responses, with upstream messages and hints
 | HTTP | Error code | Meaning |
 |---|---|---|
 | 400 | `invalid_request` | Malformed or schema-invalid JSON/options |
+| 403 | `cors_denied` | Preflight origin, method, or requested headers denied |
+| 429 | `execution_capacity_exceeded` | Every execution slot is occupied |
 | 408 | `request_canceled`, `request_timeout` | Canceled context or expired deadline |
 | 413 | `request_too_large` | Request-body or source byte limit exceeded |
 | 415 | `unsupported_media_type` | Unsupported Content-Type or parameters |
@@ -31,8 +35,12 @@ are returned only in invalid-program responses, with upstream messages and hints
 Cancellation responses are possible only while the transport remains writable.
 Malformed HTTP, oversized headers, disconnects, and connection deadlines can be
 handled by net/http outside the application and may yield text or no response.
-Raw net/http logs are reduced to generic events. The reserved `429/rate_limited`
-contract does not imply an installed rate limiter.
+Raw net/http logs are reduced to generic events.
+
+Execution admission precedes body reads and provider calls. When all slots are
+occupied, the service immediately returns 429/execution_capacity_exceeded. Slots
+remain occupied through output settlement and cleanup. Other operations and
+preflight do not use these slots. Draining rejects new operations with 503.
 
 ## Strict requests and bounds
 
@@ -73,7 +81,7 @@ Both operations use the initialized native engine's compilation path and never
 create sessions or execute FQL. Analysis uses full optimization. It checks
 parsing, lexical bindings, and the semantic checks provided by native compilation.
 Host-function resolution and parameter binding remain runtime concerns in
-alpha.60. Unknown host functions and unbound parameters can compile successfully.
+alpha.61. Unknown host functions and unbound parameters can compile successfully.
 The playground supplies no additional resolver and makes no runtime-success claim.
 
 Compilation maps `none`, `basic`, and `full` explicitly to native per-plan

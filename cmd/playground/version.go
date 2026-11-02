@@ -6,10 +6,18 @@ import (
 	"github.com/MontFerret/playground/internal/playground"
 )
 
+// releaseVersion is set by GoReleaser for the service binary.
+var releaseVersion string
+
 func serviceIdentity() playground.Service {
 	info, _ := debug.ReadBuildInfo()
 
-	return buildIdentity(info)
+	identity := buildIdentity(info)
+	if releaseVersion != "" {
+		identity.Version = &releaseVersion
+	}
+
+	return identity
 }
 
 func buildIdentity(info *debug.BuildInfo) playground.Service {

@@ -1,0 +1,88 @@
+x-chromium: &chromium ghcr.io/montferret/chromium@sha256:08afea9e2d64b281c4b7e361d8349ac8c2685bee537e947639da66b858def763
+services:
+  api:
+    image: ${PLAYGROUND_API_IMAGE:-playground-api:local}
+    build: {context: ., target: api}
+    platform: linux/amd64
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ports: ["127.0.0.1:${PLAYGROUND_PORT:-8080}:8080"]
+    environment:
+      PLAYGROUND_LISTEN_ADDR: ":8080"
+      PLAYGROUND_CDP_ORIGIN: http://relay:9222
+      PLAYGROUND_ALLOWED_ORIGINS: ${PLAYGROUND_ALLOWED_ORIGINS:-https://ferretlang.org}
+      PLAYGROUND_MAX_CONCURRENT_EXECUTIONS: ${PLAYGROUND_MAX_CONCURRENT_EXECUTIONS:-2}
+    cpus: 1
+    mem_limit: 256m
+    stop_grace_period: 15s
+    depends_on: {browser: {condition: service_started}, relay: {condition: service_healthy}}
+    networks: [front, control]
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:8080/api/v1/environment"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+  egress:
+    image: playground-egress:local
+    build: {context: ., target: egress}
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    networks: [control, outbound]
+    cpus: 0.5
+    mem_limit: 64m
+  relay:
+    image: playground-relay:local
+    build: {context: ., target: relay}
+    platform: linux/amd64
+    user: "10002:10002"
+    security_opt: ["no-new-privileges:true", "seccomp=./deploy/browser/seccomp.json"]
+    cap_drop: [ALL]
+    read_only: true
+    entrypoint: ["socat","TCP4-LISTEN:9222,fork,reuseaddr","TCP4:127.0.0.1:9223"]
+    networks: [control]
+    logging: {driver: none}
+    healthcheck:
+      test: ["CMD", "/usr/bin/browsercheck"]
+      interval: 2s
+      timeout: 4s
+      retries: 30
+  firewall:
+    image: playground-firewall:local
+    build: {context: deploy/browser, dockerfile: Dockerfile.firewall}
+    network_mode: service:relay
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    read_only: true
+    depends_on: [relay, egress]
+    volumes: [policy:/policy]
+  browser:
+    image: *chromium
+    platform: linux/amd64
+    user: "10001:10001"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true", "seccomp=./deploy/browser/seccomp.json"]
+    network_mode: service:relay
+    pid: service:relay
+    depends_on: {firewall: {condition: service_completed_successfully}}
+    environment: {HOME: /tmp, TINI_SUBREAPER: "1"}
+    entrypoint: ["/bin/sh", "/opt/playground/start.sh"]
+    tmpfs: ["/tmp:uid=10001,gid=10001,mode=0700"]
+    volumes:
+      - policy:/policy:ro
+      - ./deploy/browser:/opt/playground:ro
+      - ./deploy/browser/policy.json:/etc/opt/chrome/policies/managed/playground.json:ro
+      - ./deploy/browser/policy.json:/etc/chromium/policies/managed/playground.json:ro
+    cpus: 2
+    mem_limit: 1g
+    shm_size: 256m
+volumes:
+  policy: {}
+networks:
+  control: {internal: true}
+  outbound: {}
+  front: {}

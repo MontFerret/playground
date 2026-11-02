@@ -1,0 +1,6 @@
+.git
+vendor
+bin
+dist
+.env
+**/__pycache__

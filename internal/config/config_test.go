@@ -14,6 +14,7 @@ func TestDefaults(t *testing.T) {
 	}
 
 	want := Config{
+		MaxConcurrentExecutions: 2, AllowedOrigins: []string{"https://ferretlang.org"},
 		ListenAddr: "127.0.0.1:8080", ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second,
 		IdleTimeout: time.Minute, MaxHeaderBytes: 16384,
@@ -28,7 +29,8 @@ func TestDefaults(t *testing.T) {
 
 func TestOverridesAndInvalidValues(t *testing.T) {
 	valid := map[string]string{
-		"PLAYGROUND_MAX_EXECUTION_TIMEOUT": "123us", "PLAYGROUND_MAX_OUTPUT_BYTES": "37",
+		"PLAYGROUND_MAX_CONCURRENT_EXECUTIONS": "4",
+		"PLAYGROUND_MAX_EXECUTION_TIMEOUT":     "123us", "PLAYGROUND_MAX_OUTPUT_BYTES": "37",
 		"PLAYGROUND_LISTEN_ADDR": "[::1]:0", "PLAYGROUND_MAX_HEADER_BYTES": "8192",
 		"PLAYGROUND_READ_HEADER_TIMEOUT": "1ns", "PLAYGROUND_READ_TIMEOUT": "2s",
 		"PLAYGROUND_WRITE_TIMEOUT": "3s", "PLAYGROUND_IDLE_TIMEOUT": "4s",
@@ -95,6 +97,28 @@ func TestToolingLimitBoundaries(t *testing.T) {
 		_, err := Load(func(name string) (string, bool) { return test.value, name == test.name })
 		if (err == nil) != test.valid {
 			t.Errorf("%s boundary valid=%v: %v", test.name, test.valid, err)
+		}
+	}
+}
+
+func TestHostedOrigins(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		ok          bool
+	}{
+		{"PLAYGROUND_ALLOWED_ORIGINS", "https://ferretlang.org,http://localhost:8080", true},
+		{"PLAYGROUND_ALLOWED_ORIGINS", "https://example.org/", false},
+		{"PLAYGROUND_ALLOWED_ORIGINS", "*", false},
+		{"PLAYGROUND_ALLOWED_ORIGINS", "https://a.example, https://b.example", false},
+		{"PLAYGROUND_ALLOWED_ORIGINS", "https://user:secret@example.org", false},
+		{"PLAYGROUND_ALLOWED_ORIGINS", "https://example.org:65536", false},
+		{"PLAYGROUND_ALLOWED_ORIGINS", "null", false},
+		{"PLAYGROUND_CDP_ORIGIN", "http://relay:9222", true},
+		{"PLAYGROUND_CDP_ORIGIN", "http://relay:9222/private", false},
+	} {
+		_, err := Load(func(name string) (string, bool) { return tc.value, name == tc.name })
+		if (err == nil) != tc.ok {
+			t.Errorf("unexpected validation result for %s", tc.name)
 		}
 	}
 }

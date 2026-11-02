@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"slices"
+
+	"sync/atomic"
 	"time"
 
 	"github.com/MontFerret/playground/internal/config"
@@ -15,6 +18,9 @@ import (
 type (
 	// Handler serves only the operations implemented by this service.
 	Handler struct {
+		slots               chan struct{}
+		origins             []string
+		draining            atomic.Bool
 		provider            toolingProvider
 		service             playground.Service
 		limits              playground.HTTPLimits
@@ -60,6 +66,7 @@ func New(provider toolingProvider, service playground.Service, cfg config.Config
 	}
 
 	return &Handler{
+		slots: make(chan struct{}, cfg.MaxConcurrentExecutions), origins: slices.Clone(cfg.AllowedOrigins),
 		provider: provider, service: service, limits: httpLimits(cfg), logger: logger,
 		maxExecutionTimeout: cfg.MaxExecutionTimeout, maxOutputBytes: cfg.MaxOutputBytes,
 		toolingLimits: playground.ToolingLimits{MaxSourceBytes: cfg.MaxSourceBytes, MaxBytecodeBytes: cfg.MaxBytecodeBytes, MaxFormattedSourceBytes: cfg.MaxFormattedSourceBytes},
@@ -90,6 +97,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(response, r, http.StatusInternalServerError, "internal_error", "The service could not complete the request.")
 	}()
 
+	response.Header().Add("Vary", "Origin")
+	origin := r.Header.Get("Origin")
+	allowed := slices.Contains(h.origins, origin) && len(r.Header.Values("Origin")) == 1
+	if allowed {
+		response.Header().Set("Access-Control-Allow-Origin", origin)
+	}
 	method := http.MethodPost
 	switch r.URL.Path {
 	case "/api/v1/environment":
@@ -101,6 +114,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+		response.Header().Add("Vary", "Access-Control-Request-Method")
+		response.Header().Add("Vary", "Access-Control-Request-Headers")
+		if !allowed || r.Header.Get("Access-Control-Request-Method") != method || !allowedRequestHeaders(r.Header.Values("Access-Control-Request-Headers")) {
+			h.writeError(response, r, http.StatusForbidden, "cors_denied", "The preflight request is not allowed.")
+			return
+		}
+		response.Header().Set("Access-Control-Allow-Methods", method)
+		response.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		response.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if r.Method != method {
 		response.Header().Set("Allow", method)
 		h.writeError(response, r, http.StatusMethodNotAllowed, "method_not_allowed", "This route supports "+method+".")
@@ -108,6 +133,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.draining.Load() {
+		h.writeOperationError(response, r, playground.ErrClosed)
+		return
+	}
+	if r.URL.Path == "/api/v1/execute" {
+		select {
+		case h.slots <- struct{}{}:
+			defer func() { <-h.slots }()
+		default:
+			h.writeError(response, r, http.StatusTooManyRequests, "execution_capacity_exceeded", "All execution slots are occupied.")
+			return
+		}
+	}
 	if method == http.MethodPost {
 		h.serveTooling(response, r)
 
@@ -131,8 +169,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Limits: playground.Limits{
 			HTTP: h.limits, Tooling: h.toolingLimits,
 			Execution: playground.ExecutionLimits{
-				MaxTimeoutMs:   float64(h.maxExecutionTimeout) / float64(time.Millisecond),
-				MaxOutputBytes: h.maxOutputBytes,
+				MaxConcurrentExecutions: cap(h.slots),
+				MaxTimeoutMs:            float64(h.maxExecutionTimeout) / float64(time.Millisecond),
+				MaxOutputBytes:          h.maxOutputBytes,
 			},
 		},
 	})
@@ -190,4 +229,9 @@ func (h *Handler) writeBufferedJSON(w http.ResponseWriter, r *http.Request, stat
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(append(body, '\n'))
 	}
+}
+
+// BeginDrain rejects subsequent operations while in-flight requests settle.
+func (h *Handler) BeginDrain() {
+	h.draining.Store(true)
 }

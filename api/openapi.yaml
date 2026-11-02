@@ -16,6 +16,25 @@ tags:
   - name: Execution
 paths:
   /api/v1/environment:
+    options:
+      operationId: preflightEnvironment
+      x-implementation-status: implemented
+      summary: Check an exact-origin CORS preflight for this route
+      responses:
+        '204':
+          description: Configured origin, route method, and requested headers permitted
+          headers:
+            Access-Control-Allow-Origin: {schema: {type: string}}
+            Access-Control-Allow-Methods: {schema: {type: string}}
+            Access-Control-Allow-Headers: {schema: {type: string}}
+            Vary: {schema: {type: string}}
+        '403':
+          description: Origin, method, or requested headers denied
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
     get:
       operationId: getEnvironment
       tags: [Environment]
@@ -23,7 +42,7 @@ paths:
       x-implementation-status: implemented
       description: >-
         Performs no FQL evaluation, browser startup, or external request.
-        Only GET is supported. Other methods receive 405 with Allow: GET;
+        GET and CORS preflight are supported. Other methods receive 405 with Allow: GET;
         HEAD error responses have no body. Unknown paths receive Error with 404.
       responses:
         '200':
@@ -37,7 +56,7 @@ paths:
                 service: {name: ferret-playground, version: null}
                 runtime:
                   name: ferret
-                  version: v2.0.0-alpha.60
+                  version: v2.0.0-alpha.61
                   standardLibrary: safe
                   modules: []
                 capabilities:
@@ -60,7 +79,7 @@ paths:
                     readTimeoutMs: 10000
                     writeTimeoutMs: 15000
                     idleTimeoutMs: 60000
-                  execution: {maxTimeoutMs: 5000, maxOutputBytes: 1048576}
+                  execution: {maxConcurrentExecutions: 2, maxTimeoutMs: 5000, maxOutputBytes: 1048576}
                   tooling:
                     maxSourceBytes: 65536
                     maxBytecodeBytes: 1048576
@@ -73,9 +92,30 @@ paths:
           $ref: '#/components/responses/RequestCanceled'
         '422':
           $ref: '#/components/responses/ResponseTooLarge'
+        '503':
+          $ref: '#/components/responses/Unavailable'
         '500':
           $ref: '#/components/responses/InternalError'
   /api/v1/analyze:
+    options:
+      operationId: preflightAnalyze
+      x-implementation-status: implemented
+      summary: Check an exact-origin CORS preflight for this route
+      responses:
+        '204':
+          description: Configured origin, route method, and requested headers permitted
+          headers:
+            Access-Control-Allow-Origin: {schema: {type: string}}
+            Access-Control-Allow-Methods: {schema: {type: string}}
+            Access-Control-Allow-Headers: {schema: {type: string}}
+            Vary: {schema: {type: string}}
+        '403':
+          description: Origin, method, or requested headers denied
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
     post:
       operationId: analyzeSource
       tags: [Tooling]
@@ -116,6 +156,25 @@ paths:
         '503':
           $ref: '#/components/responses/Unavailable'
   /api/v1/format:
+    options:
+      operationId: preflightFormat
+      x-implementation-status: implemented
+      summary: Check an exact-origin CORS preflight for this route
+      responses:
+        '204':
+          description: Configured origin, route method, and requested headers permitted
+          headers:
+            Access-Control-Allow-Origin: {schema: {type: string}}
+            Access-Control-Allow-Methods: {schema: {type: string}}
+            Access-Control-Allow-Headers: {schema: {type: string}}
+            Vary: {schema: {type: string}}
+        '403':
+          description: Origin, method, or requested headers denied
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
     post:
       operationId: formatSource
       tags: [Tooling]
@@ -156,6 +215,25 @@ paths:
         '503':
           $ref: '#/components/responses/Unavailable'
   /api/v1/compile:
+    options:
+      operationId: preflightCompile
+      x-implementation-status: implemented
+      summary: Check an exact-origin CORS preflight for this route
+      responses:
+        '204':
+          description: Configured origin, route method, and requested headers permitted
+          headers:
+            Access-Control-Allow-Origin: {schema: {type: string}}
+            Access-Control-Allow-Methods: {schema: {type: string}}
+            Access-Control-Allow-Headers: {schema: {type: string}}
+            Vary: {schema: {type: string}}
+        '403':
+          description: Origin, method, or requested headers denied
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
     post:
       operationId: compileSource
       tags: [Tooling]
@@ -208,6 +286,25 @@ paths:
         '503':
           $ref: '#/components/responses/Unavailable'
   /api/v1/execute:
+    options:
+      operationId: preflightExecute
+      x-implementation-status: implemented
+      summary: Check an exact-origin CORS preflight for this route
+      responses:
+        '204':
+          description: Configured origin, route method, and requested headers permitted
+          headers:
+            Access-Control-Allow-Origin: {schema: {type: string}}
+            Access-Control-Allow-Methods: {schema: {type: string}}
+            Access-Control-Allow-Headers: {schema: {type: string}}
+            Vary: {schema: {type: string}}
+        '403':
+          description: Origin, method, or requested headers denied
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
     post:
       operationId: executeSource
       tags: [Execution]
@@ -266,6 +363,8 @@ paths:
           $ref: '#/components/responses/ResponseTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '503':
           $ref: '#/components/responses/Unavailable'
 components:
@@ -331,15 +430,12 @@ components:
             $ref: '#/components/schemas/Error'
           example: {error: {code: response_too_large, message: The generated response exceeds the configured limit.}}
     RateLimited:
-      description: Reserved for future admission controls; no rate limiter is currently installed
-      headers:
-        Retry-After:
-          description: Delay in seconds when known
-          schema: {type: integer, minimum: 0}
+      description: All execution slots are occupied. Rejected before the request body is read.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+          example: {error: {code: execution_capacity_exceeded, message: All execution slots are occupied.}}
     InternalError:
       description: Internal service failure, distinct from submitted-program outcomes; no internal error details
       content:
@@ -348,7 +444,7 @@ components:
             $ref: '#/components/schemas/Error'
           example: {error: {code: internal_error, message: The service could not complete the request.}}
     Unavailable:
-      description: Runtime is closing and cannot admit tooling work
+      description: The service is draining and cannot admit new work
       content:
         application/json:
           schema:
@@ -440,8 +536,9 @@ components:
     ExecutionLimits:
       type: object
       additionalProperties: false
-      required: [maxTimeoutMs, maxOutputBytes]
+      required: [maxConcurrentExecutions, maxTimeoutMs, maxOutputBytes]
       properties:
+        maxConcurrentExecutions: {type: integer, minimum: 1}
         maxTimeoutMs: {type: number, minimum: 0, exclusiveMinimum: true, description: "Effective server deadline in milliseconds"}
         maxOutputBytes: {type: integer, minimum: 1, description: "Maximum encoded result bytes retained for delivery, inclusive"}
     ToolingLimits:
@@ -745,5 +842,5 @@ components:
           properties:
             code:
               type: string
-              enum: [invalid_request, not_found, method_not_allowed, request_too_large, unsupported_media_type, request_canceled, request_timeout, response_too_large, rate_limited, internal_error, service_unavailable]
+              enum: [invalid_request, not_found, method_not_allowed, request_too_large, unsupported_media_type, request_canceled, request_timeout, response_too_large, rate_limited, execution_capacity_exceeded, cors_denied, internal_error, service_unavailable]
             message: {type: string, minLength: 1}

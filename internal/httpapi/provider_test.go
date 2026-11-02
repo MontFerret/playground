@@ -8,6 +8,7 @@ import (
 )
 
 type (
+	unreadable   struct{}
 	testProvider struct {
 		call    func(context.Context) (playground.Runtime, error)
 		analyze func(context.Context, playground.Source) (playground.AnalysisResult, error)
@@ -53,4 +54,12 @@ func (v cancelingJSON) MarshalJSON() ([]byte, error) {
 
 func (p testProvider) Execute(ctx context.Context, src playground.Source, options playground.ExecuteOptions) (playground.ExecuteResult, error) {
 	return p.execute(ctx, src, options)
+}
+
+func (unreadable) Read([]byte) (int, error) {
+	panic("overloaded request body was read")
+}
+
+func (unreadable) Close() error {
+	return nil
 }
