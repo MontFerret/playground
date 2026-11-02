@@ -6,6 +6,7 @@ dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 cp "$binary" "$dir/playground"
 cp Dockerfile.release "$dir/Dockerfile"
+cp deploy/browser/policy.json "$dir/policy.json"
 image="playground-release:$version"
 docker build --platform linux/amd64 \
   --label org.opencontainers.image.source=https://github.com/MontFerret/playground \
@@ -19,7 +20,7 @@ digest=$(skopeo manifest-digest "$dir/manifest")
 jq -n --arg public "$public" --arg private "$private" --arg version "$version" \
   --arg minor "$minor" --arg channel "$channel" --arg digest "$digest" \
   '{public:$public,private:$private,version:$version,minor:$minor,channel:$channel,digest:$digest}' > dist/image.json
-# Import the archived artifact and give Compose its image ID under a fresh tag.
+# Import the archived artifact under a fresh tag for the single-container suite.
 # docker-archive uses the selected Docker CLI context on Linux and Desktop alike.
 tested="playground-verified:$version"
 skopeo copy "oci-archive:$archive" "docker-archive:$dir/verified.tar:$tested"

@@ -9,11 +9,19 @@ import time
 from pathlib import Path
 
 
-def compose(*args):
-    return subprocess.check_output(["docker", "compose", *args], text=True).strip()
+api = os.environ["PLAYGROUND_API_CONTAINER"]
+fixture = os.environ["PLAYGROUND_FIXTURE_CONTAINER"]
 
 
-addr = compose("port", "api", "8080")
+def docker(*args):
+    return subprocess.check_output(["docker", *args], text=True).strip()
+
+
+def api_exec(*args):
+    return docker("exec", api, *args)
+
+
+addr = docker("port", api, "8080/tcp")
 origin = "https://ferretlang.org"
 site = "https://mockery.ferretlang.org"
 marker = "private-fql-output-53d681"
@@ -47,7 +55,7 @@ def execute(text, **fields):
 # Keep one private fixture signal process alive. Starting a new docker exec
 # for every release can consume the shutdown grace period on slower runners.
 agent = subprocess.Popen(
-    ["docker", "compose", "exec", "-T", "fixture", "python", "-u", "-c",
+    ["docker", "exec", "-i", fixture, "python", "-u", "-c",
      "import sys,json,urllib.request\n"
      "for line in sys.stdin:\n"
      " action,token=json.loads(line)\n"
@@ -71,8 +79,7 @@ def control(action, token):
 
 
 def targets():
-    return {x["id"] for x in json.loads(compose("exec", "-T", "relay", "curl", "-fsS",
-                                               "http://127.0.0.1:9223/json/list")) if x["type"] == "page"}
+    return {x["id"] for x in json.loads(api_exec("curl", "-fsS", "http://127.0.0.1:9222/json/list")) if x["type"] == "page"}
 
 
 def eventually(predicate, timeout=7):
@@ -122,7 +129,10 @@ def checks():
         except (OSError, http.client.HTTPException):
             return False
 
-    eventually(ready, timeout=15)
+    eventually(ready, timeout=60)
+    bindings = json.loads(docker("inspect", "--format", "{{json .NetworkSettings.Ports}}", api))
+    assert bindings["8080/tcp"][0]["HostIp"] == "127.0.0.1", bindings
+    assert not bindings.get("9222/tcp"), bindings
     _, env = request("environment")
     assert env["runtime"]["modules"] == [{"name": "html", "version": "v1.0.0-rc.24"}], env
     assert env["runtime"]["version"] == "v2.0.0-alpha.61"
@@ -141,30 +151,31 @@ def checks():
     assert request("execute", method="OPTIONS", headers={"Access-Control-Request-Method":"POST",
                    "Access-Control-Request-Headers":"Content-Type"})[0] == 204
     assert request("execute", {})[0] == 400
-    # The trusted relay can reach CDP. The browser identity cannot open the
-    # same loopback connection, even with proxy behavior explicitly bypassed.
-    compose("exec", "-T", "relay", "curl", "-fsS", "http://127.0.0.1:9223/json/version")
-    direct = subprocess.run(["docker", "compose", "exec", "-T", "--user", "10001:10001",
-                             "relay", "curl", "--noproxy", "*", "--max-time", "1", "-fsS",
-                             "http://127.0.0.1:9223/json/version"],
-                            capture_output=True)
-    assert direct.returncode == 28, "browser identity could reach CDP directly"
+    # This root-only command runs bypass attempts as the browser UID inside
+    # its actual user/network namespace, with positive proxy/CDP controls.
+    api_exec("/usr/bin/playground", "container", "check")
+    api_exec("curl", "-fsS", "http://127.0.0.1:9222/json/version")
+    pids = dict(line.split() for line in api_exec("cat", "/tmp/playground/processes").splitlines())
+    for role, pid in pids.items():
+        status = dict(line.split(":", 1) for line in api_exec("cat", f"/proc/{pid}/status").splitlines())
+        assert not status["Groups"].strip(), (role, status["Groups"])
+        assert set(status["Uid"].split()) == ({"10001"} if role == "browser" else {"10002"}), role
     baseline = targets()
     assert json.loads(execute(state("/write"))) == ["run=private","private","private"]
     assert json.loads(execute(state("/read"))) == ["","",""]
     eventually(lambda: targets() == baseline)
     # Positive control for the destination counter, independent of its hostname
     # allowlist. Afterwards neither a redirect nor a subresource may increment it.
-    compose("exec","-T","fixture","python","-c",
+    docker("exec",fixture,"python","-c",
             "import http.client,ssl;c=http.client.HTTPSConnection('localhost',context=ssl._create_unverified_context());"
             "c.request('GET','/control',headers={'Host':'forbidden.test'});assert c.getresponse().status==200")
     assert control("count","forbidden") == "1"
     request("execute", program(f"LET p = {document('/redirect')} RETURN p.url"))
     assert execute(state("/subresource")) == "blocked"
     assert control("count","forbidden") == "1"
-    for query in ['RETURN DOWNLOAD("http://relay:9222/json")',
+    for query in ['RETURN DOWNLOAD("http://127.0.0.1:9222/json")',
                   'RETURN DOCUMENT("file:///etc/passwd")', 'RETURN DOCUMENT("chrome://version")',
-                  'RETURN DOCUMENT("http://169.254.169.254/")', 'RETURN DOCUMENT("http://relay:9222/json")',
+                  'RETURN DOCUMENT("http://169.254.169.254/")', 'RETURN DOCUMENT("http://127.0.0.1:9222/json")',
                   f'RETURN DOCUMENT("{site}/",{{keepCookies:true}})']:
         status, body = request("execute", program(query))
         assert status == 200 and body["status"] == "failed" and "output" not in body, body
@@ -185,11 +196,12 @@ def checks():
         status, body = request("execute", program(query, options=options))
         assert status == 200 and body["status"] == "failed" and "output" not in body and body["diagnostics"][0]["code"] == code, body
     control("release","deadline")
-    assert marker not in compose("logs","--no-color")
+    assert marker not in docker("logs", api)
 
+    shutdowns = []
     for force in (False, True):
         active = Held("forced" if force else "graceful")
-        cid = compose("ps","-q","api")
+        cid = api
         before = time.monotonic()
         signaled = subprocess.Popen(["docker", "kill", "--signal=SIGTERM", cid],
                                     stdout=subprocess.DEVNULL)
@@ -204,20 +216,42 @@ def checks():
             eventually(stopped_admission, timeout=3)
             active.release()
             assert active.result is not None and active.result[1].get("output") == 1, active.result
-        signaled.wait(timeout=13)
-        exitcode = subprocess.check_output(["docker","wait",cid],text=True,timeout=13).strip()
+        signaled.wait(timeout=10)
+        exitcode = subprocess.check_output(["docker","wait",cid],text=True,timeout=10).strip()
         elapsed = time.monotonic()-before
-        assert exitcode == ("1" if force else "0") and elapsed < 12, (exitcode,elapsed)
+        assert exitcode == ("1" if force else "0") and elapsed < 9, (exitcode,elapsed)
         if force:
-            assert elapsed >= 4.8
+            assert elapsed >= 3.8
             active.release()
-        eventually(lambda: targets() == baseline)
+        assert docker("inspect", "--format", "{{.State.Pid}}", api) == "0"
         print(f"shutdown force={force} exit={exitcode} elapsed={elapsed:.2f}s", flush=True)
+        shutdowns.append({"forced": force, "exit": int(exitcode), "elapsedSeconds": round(elapsed, 3)})
         if not force:
-            compose("up","--no-build","--no-deps","--wait","api")
-            addr = compose("port", "api", "8080")
-            eventually(ready, timeout=15)
-    print("Packaged contract, browser, isolation, admission and shutdown checks passed.")
+            docker("start", api)
+            addr = docker("port", api, "8080/tcp")
+            eventually(ready, timeout=60)
+    for role in ("browser", "proxy-relay"):
+        docker("start", api)
+        addr = docker("port", api, "8080/tcp")
+        eventually(ready, timeout=60)
+        assert json.loads(execute(state("/read"))) == ["", "", ""]
+        pids = dict(line.split() for line in api_exec("cat", "/tmp/playground/processes").splitlines())
+        before = time.monotonic()
+        api_exec("kill", "-KILL", pids[role])
+        code = subprocess.check_output(["docker", "wait", api], text=True, timeout=10).strip()
+        assert code != "0" and time.monotonic() - before < 9, (role, code)
+        assert docker("inspect", "--format", "{{.State.Pid}}", api) == "0"
+        assert marker not in docker("logs", api)
+    resources = json.loads(docker("inspect", "--format", "{{json .HostConfig}}", api))
+    print("Verification evidence: " + json.dumps({
+        "runner": docker("info", "--format", "{{.OperatingSystem}} {{.Architecture}} {{.KernelVersion}}"),
+        "runnerCPUs": int(docker("info", "--format", "{{.NCPU}}")),
+        "runnerMemoryBytes": int(docker("info", "--format", "{{.MemTotal}}")),
+        "containerCPUs": resources["NanoCpus"] / 1e9,
+        "containerMemoryBytes": resources["Memory"], "sharedMemoryBytes": resources["ShmSize"],
+        "shutdowns": shutdowns,
+    }), flush=True)
+    print("Packaged contract, browser, isolation, admission, rollback and shutdown checks passed.")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,14 @@ destinations and alias policy. Its post-build hook builds the Linux/amd64 releas
 image once, exports an OCI archive, imports that archive, and runs the packaged
 integration suite with API builds disabled. Publication requires the resulting
 verified descriptor and copies the existing archive with digest preservation.
+The image includes Chromium, the API, and the internal namespace/proxy launcher.
+The final Dockerfile copies the prebuilt Go binary; it does not compile Go.
+Only the OCI release asset starts registry publication; the binary archive and
+descriptor remain GitHub release assets without starting additional publishers.
+The publisher explicitly passes Skopeo the Docker login file, using
+`$DOCKER_CONFIG/config.json` or `$HOME/.docker/config.json`. An explicit
+`REGISTRY_AUTH_FILE` takes precedence. This avoids Skopeo's runtime-directory
+credential lookup after GoReleaser filters the publisher's environment.
 
 The release workflow runs on `v*` tags and serializes registry publication.
 It creates a draft GitHub release and retains the OCI archive and descriptor
@@ -24,7 +32,7 @@ causes failure without overwriting the full version.
 
 ## Credential-free verification
 
-Install Go as declared in go.mod, Docker Compose v2.24.4 or later, Python 3,
+Install Go as declared in go.mod, Docker Engine 25 or later, Python 3,
 OpenSSL, curl, jq, Skopeo, and GoReleaser v2.19.0. Use native Linux/amd64 with working
 unprivileged user namespaces and Chromium's nested seccomp sandbox.
 
@@ -38,6 +46,11 @@ Snapshots build the same release entry point and runtime configuration, and
 require neither registry credentials nor public test websites. The browser,
 base images, Go modules and integration images must be cached for offline use.
 Snapshot descriptors cannot be published by the release publisher.
+Before creating a release tag for the unified image, complete the separate
+[Cloud Run compatibility gate](cloud-run.md). A local `verified: true` descriptor
+records the packaged suite, not a live Cloud Run deployment. Failed or missing
+Cloud Run isolation evidence blocks release. The previous API-only archives do
+not establish compatibility of this image.
 
 ## First-release settings
 
@@ -151,10 +164,16 @@ authentication, permissions, visibility or registry availability first.
 ```sh
 # Authenticate with a maintainer-approved GHCR token and a Google identity with
 # repository-scoped access, or run these steps in the existing trusted release job.
-skopeo login ghcr.io
-gcloud auth print-access-token |
-  skopeo login --username oauth2accesstoken --password-stdin us-east1-docker.pkg.dev
-bash scripts/release/publish.sh
+(
+  set -euo pipefail
+  recovery_auth=$(mktemp -d)
+  trap 'rm -rf "$recovery_auth"' EXIT
+  export REGISTRY_AUTH_FILE="$recovery_auth/auth.json"
+  skopeo login ghcr.io
+  gcloud auth print-access-token |
+    skopeo login --username oauth2accesstoken --password-stdin us-east1-docker.pkg.dev
+  bash scripts/release/publish.sh
+)
 ```
 
 Recovery verifies the local archive digest, skips matching full-version tags,

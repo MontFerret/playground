@@ -1,4 +1,0 @@
-FROM alpine:3.23
-RUN apk add --no-cache nftables
-COPY firewall.sh /usr/local/bin/firewall
-ENTRYPOINT ["/bin/sh", "/usr/local/bin/firewall"]

@@ -79,8 +79,13 @@ go test ./internal/runtimehost -run '^$' -bench '^BenchmarkFragmentedOutput$' -b
 
 ## Packaged deployment
 
-`make integration` runs browser fixtures through the packaged HTTP service.
+`make integration` runs browser fixtures through the single-container HTTP service.
 `make release-snapshot` builds and imports the GoReleaser OCI archive before
 running that same suite. Both require native Linux/amd64 and a working
 unprivileged Chromium sandbox. See [deployment guidance](../../deployment.md).
 These targets are separate from fast Go tests.
+The suite has a separate test-only TLS fixture container. It exercises namespace
+denial during partial initialization, direct connections from the actual browser
+namespace, essential-child failure, and whole-container shutdown under nine
+seconds. Local Docker success is separate from the mandatory real Cloud Run
+compatibility checks in [Cloud Run validation](../../cloud-run.md).

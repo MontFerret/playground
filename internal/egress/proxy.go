@@ -1,25 +1,21 @@
-// Command egress is the packaged browser's single-destination CONNECT proxy.
-package main
+// Package egress provides the browser's single-destination CONNECT proxy.
+package egress
 
 import (
 	"context"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/netip"
-	"os"
 	"time"
 )
 
-const demoHost = "mockery.ferretlang.org"
-
-func main() {
-	server := http.Server{Addr: ":3128", Handler: http.HandlerFunc(tunnel), ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 8192, ErrorLog: log.New(io.Discard, "", 0)}
-	if server.ListenAndServe() != nil {
-		os.Exit(1)
-	}
+// Handler permits only CONNECT to the public Mockery HTTPS origin.
+func Handler() http.Handler {
+	return http.HandlerFunc(tunnel)
 }
+
+const demoHost = "mockery.ferretlang.org"
 
 func tunnel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodConnect || r.RequestURI != demoHost+":443" || r.Host != r.RequestURI {

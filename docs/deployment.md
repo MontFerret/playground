@@ -1,39 +1,88 @@
-# Packaged deployment
+# Single-container deployment
 
-The first supported platform is native Linux/amd64. Install Docker and Docker
-Compose v2.24.4 or later, and allow unprivileged user namespaces on the host.
-The browser uses the checked-in seccomp profile and its own namespace and
-seccomp sandbox. Readiness inspects an actual renderer's nested PID namespace
-and additional seccomp filters. An unhealthy browser prevents API startup.
-Apple Silicon emulation does not provide the required inner seccomp evidence.
+The product is one Linux/amd64 image containing the API, Chromium, and private
+supervision, proxy, and control processes. It requires working unprivileged user
+namespaces, namespace-local nftables, and Chromium's renderer sandbox. Every
+required check runs before HTTP starts. Unsupported isolation fails closed.
+There is no `--no-sandbox` fallback.
 
-From a clean checkout, start the complete deployment with `make up`. The only
-published port is `127.0.0.1:8080`. Set `PLAYGROUND_PORT` to select another
-local port. `make down` removes the deployment and ephemeral policy volume.
-The Docker daemon is required to apply the one-shot network namespace policy.
+## Local startup
 
-| Service | CPU limit | Memory limit | Identity and ownership |
-|---|---|---|---|
-| API | 1 | 256 MiB | UID 65532, owns native engine and request descendants |
-| Chromium | 2 | 1 GiB, 256 MiB shared memory | UID 10001, Compose owns process and ephemeral profile |
-| Egress proxy | 0.5 | 64 MiB | UID 65532, owns CONNECT tunnels |
-| CDP relay | shared deployment resources | shared deployment resources | UID 10002, trusted loopback control relay |
-| Firewall setup | startup only | startup only | Root with NET_ADMIN only, installs rules before Chromium starts, then exits |
+Use native Linux/amd64 and Docker Engine 25 or later:
 
-All serving processes have capabilities dropped and read-only roots.
-Chromium's writable profile is an ephemeral tmpfs. The proxy and API receive
-no cloud credentials. The Chromium image is pinned to Chrome 148.0.7778.178,
-Linux/amd64 manifest `sha256:08afea9e2d64b281c4b7e361d8349ac8c2685bee537e947639da66b858def763`.
-The seccomp profile derives from Playwright v1.55.0's
-[Docker profile](https://github.com/microsoft/playwright/blob/v1.55.0/utils/docker/seccomp_profile.json),
-with chroot permitted for the nested user namespace.
+```sh
+make up
+make down
+```
 
-## Examples and compatibility
+`make up` builds and starts one container named `playground`, waits for health,
+and publishes only `127.0.0.1:8080`. `PLAYGROUND_PORT` changes the local port.
+`make down` removes the container and its anonymous base-image volume.
+Compose and external browser/proxy services are not required.
 
-| Example | Required registrations | Host access |
+The checked-in seccomp profile allows namespace creation locally. The selected
+identity-management capabilities are a subset of Docker's defaults; neither
+outer NET_ADMIN nor SYS_ADMIN is granted. Cloud Run must pass the same checks
+under its own standard second-generation runtime policy.
+
+| Resource | Packaged setting |
+|---|---|
+| CPU | 2 CPUs shared by all processes |
+| Memory | 2 GiB shared by all processes |
+| Local temporary storage | 1 GiB tmpfs; ephemeral in Cloud Run |
+| Shared memory | 64 MiB; Chromium uses temporary files with `--disable-dev-shm-usage` |
+| Execution admission | 2 slots per API instance |
+| HTTP drain / cleanup | At most 4 seconds / 3 seconds |
+| Container shutdown | 8.5-second absolute budget, below Cloud Run's 10 seconds |
+
+Cloud Run configuration and the required live compatibility gate are described
+in [Cloud Run validation](cloud-run.md). No release or deployment should claim
+Cloud Run compatibility based only on Docker tests.
+
+## Ownership and enforcement
+
+The trusted outer supervisor starts a non-root proxy, creates a private browser
+user/network namespace, and connects it through permission-protected Unix
+sockets. The namespace has only loopback and no external interface or route.
+Its bootstrap root maps to outer UID 65530. It installs UID-specific nftables
+rules there, then starts Chromium as UID 10001 and trusted relays as UID 10002.
+The API and outer serving helpers run as UID 65532.
+Inherited supplementary groups are cleared before any worker starts.
+
+The browser UID may open only the namespace proxy port, and may reply to
+established trusted CDP connections. Other TCP, UDP, IPv6, DNS, metadata,
+loopback control, and direct external connections are denied. The Unix bridges
+are inaccessible to that UID. The proxy accepts only CONNECT to
+`mockery.ferretlang.org:443`, rejects every nonpublic IPv4 DNS answer, and dials the
+validated numeric public address without a second lookup.
+
+Readiness checks actual renderer UIDs, nested PID namespaces and additional
+seccomp filters. It also executes direct-connection and Unix-socket bypass
+probes as the browser UID inside the actual namespace, with a positive proxy
+control. The CDP relay binds only parent loopback. The packaged operator command
+`/usr/bin/playground container check` repeats those probes through a root-only
+Unix socket; it accepts no arbitrary command or destination.
+
+Chromium's profile is private ephemeral storage. Managed policy blocks file and
+privileged-scheme navigation, downloads and file selection. Chromium uses a
+fixed proxy with its implicit loopback bypass disabled. Browser/relay stderr,
+proxy errors, and native runtime logs are discarded. Operational events contain
+fixed stage codes and shutdown durations, never FQL, parameters, page content,
+or credentials.
+
+On SIGTERM the supervisor signals the API first. HTTP admission closes and the
+API drains before cancellation and native/browser cleanup. Only afterwards are
+browser and proxy process groups stopped. Tini reaps orphaned descendants.
+Unexpected browser, proxy or relay exit terminates the whole container. The
+same bounded cleanup covers partial initialization. The profile is discarded
+with container storage instead of recursively walking caches during shutdown.
+
+## Examples
+
+| Example | Registrations | Host access |
 |---|---|---|
 | `RETURN @value` | Safe standard library | None |
-| [Product extraction](../examples/products.fql) | Restricted HTML DOCUMENT, CDP driver, safe conversions and strings | HTTPS Mockery origin |
+| [Product extraction](../examples/products.fql) | Restricted HTML DOCUMENT and CDP | HTTPS Mockery origin |
 
 ```sh
 curl -fsS http://127.0.0.1:8080/api/v1/execute \
@@ -44,80 +93,49 @@ python3 -c 'import json,pathlib; print(json.dumps({"source":{"text":pathlib.Path
     -H 'Content-Type: application/json' --data-binary @-
 ```
 
-The product query is copied from the public
-[playground](https://ferretlang.org/try/). It uses CDP, waits for a nonempty
-product-card collection and returns brands, titles and numeric prices.
-The FQL is unchanged. The adapter subscribes to CDP lifecycle events before
-initial navigation because the pinned module can miss completion on fast pages.
-The existing upstream page loader handles the completed document.
+The public product FQL is unchanged. Initial navigation subscribes to lifecycle
+events before navigating, avoiding the pinned HTML module's fast-page race.
+Only upstream DOCUMENT is registered. DOWNLOAD and PARSE remain unavailable.
+Request options cannot select a shared profile, cookies, arbitrary headers,
+init scripts, user agents, or another driver. Each execution lazily creates a
+fresh disposable browser context; its pages, popups and state are removed
+before its execution slot is released.
 
-Worker's broader module set is outside the hosted example contract. Only
-DOCUMENT is registered from the upstream HTML library. DOWNLOAD and PARSE are
-unavailable. DOCUMENT options may select the cdp driver and a shorter load
-timeout. Cookies, headers, init scripts, viewport, user-agent and reuse settings
-are host-owned. Pages in one execution share a fresh incognito context, and
-its closure removes storage and popups before an execution slot is released.
+Pins remain Go 1.27, Ferret `v2.0.0-alpha.61`, Universal API
+`v1.0.0-alpha.21`, and HTML `v1.0.0-rc.24`. The browser is MontFerret Chrome
+148.0.7778.178, Linux/amd64 manifest
+`sha256:08afea9e2d64b281c4b7e361d8349ac8c2685bee537e947639da66b858def763`.
+The local seccomp profile derives from [Playwright v1.55.0](https://github.com/microsoft/playwright/blob/v1.55.0/utils/docker/seccomp_profile.json),
+with chroot permitted for the nested user namespace.
 
-## Enforcement
+## Verification and cutover
 
-| Restriction | Enforcement owner |
-|---|---|
-| Concurrent execution cap | HTTP handler, acquired before reading a POST body, released after native and browser cleanup |
-| Native HTTP and filesystem | Safe standard-library selection, explicit disabled Ferret HTTP client, no filesystem root |
-| Initial document URL and host options | Run-local CDP driver |
-| Redirects, subresources, frames, workers, WebSockets | Fixed manual proxy and single exact CONNECT authority |
-| DNS rebinding and internal addresses | Proxy resolves IPv4 once, rejects nonpublic answers, dials the checked address |
-| Direct sockets, UDP, DNS, localhost and CDP access from browser | UID-specific inet nftables output rules before Docker DNS translation |
-| File and privileged-scheme navigation | Chromium managed URL policy and driver validation |
-| CDP control | Private relay, distinct trusted UID, no published control port |
-| CORS | Exact operator origins, Content-Type preflight, headers installed before route and error handling |
-| Sensitive logs | Discarded native/browser/relay diagnostics, sanitized HTTP and startup events |
+`make integration` uses the development image. `make release-snapshot` imports
+its OCI archive and runs the same suite with API builds disabled. Both remove
+containers, anonymous volumes and test networks on every exit. A separate
+private TLS fixture uses JavaScript-rendered cards, explicit hold/release
+signals, storage probes and reachable forbidden-request canaries. It routes the
+Mockery hostname only inside the test container and trusts one ephemeral SPKI.
+After caching images, `PLAYGROUND_USE_CACHED_IMAGES=1 make integration` skips
+builds and pulls. No public fixture website or cloud credentials are needed.
 
-The browser UID may connect only to the proxy's pinned deployment IP and port
-3128. Its only loopback traffic is replies to established trusted CDP connections.
-The same inet rules cover IPv6. The proxy permits only
-`mockery.ferretlang.org:443`. It does not forward plain HTTP or expose another
-proxy target. The test fixture changes DNS only inside a disconnected Compose
-network. It uses a synthetic public address and an ephemeral TLS key, with
-a test-only certificate SPKI exception.
+Local namespace, UID policy, Unix bridging and renderer verification passed in
+an Ubuntu 24.04 Linux/amd64 QEMU guest (4 vCPUs, 4 GiB RAM). The container used
+the settings above. Real Cloud Run compatibility remains a release blocker
+until the separate procedure passes. Apple Silicon instruction emulation does
+not provide the renderer sandbox evidence and fails readiness.
 
-On SIGTERM, admission closes, active HTTP requests get the grace period, and
-expired requests are canceled before resource cleanup. Defaults allow five
-seconds each for drain and cleanup. Compose allows fifteen seconds before a
-forced kill. The suite uses five seconds for drain and four for cleanup, and
-asserts exit within twelve seconds.
+The 2026-11-02 cached/offline archive run passed on Ubuntu 24.04.5 x86_64,
+kernel 6.8.0-142-generic. Whole-container shutdown measured 4.294 seconds with a
+draining request and 6.866 seconds with forced cancellation. Namespace-denial
+rollback, browser/relay failure, reaping and all HTTP/browser assertions passed.
+The tested unified OCI manifest is
+`sha256:4e74bf4f0e59e4dff25dac12659a4546df294afdbed351f53db210952b3afbb5`.
+This is local snapshot evidence, without registry publication or Cloud Run
+validation. The suite prints runner resources and shutdown measurements on
+every passing run; retain that output with the archive and `dist/image.json`.
 
-## Verification and cutover gates
-
-`make integration` starts the actual development image. `make release-snapshot`
-imports the OCI archive and runs the same suite with API builds disabled.
-Both trap failures and remove the test project, networks and volumes.
-The private fixture uses JavaScript to render cards, explicit hold/release
-signals, state probes, and reachable forbidden-request canaries.
-
-The first run pulls the missing browser and Python fixture images and builds
-the local service images. Startup then uses only those prepared images, with
-API builds disabled when verifying an imported release archive.
-After caching the images, use `PLAYGROUND_USE_CACHED_IMAGES=1 make integration`
-to skip image preparation and avoid builds and pulls. The suite requires
-Python 3, OpenSSL and Docker Compose, and does not require cloud credentials
-or public fixture websites.
-
-Native Linux/amd64 packaged verification is required before cutover. The
-website currently sends Worker's `{text, params}` body and reads raw output.
-It needs to call `/api/v1/execute` with `source.text`, consume the outcome
-envelope and handle 429. Switching the website and production deployment
-require separate changes. Any failed sandbox, isolation, egress or shutdown
-assertion blocks release verification.
-
-
-Verified on 2026-11-02 with the pinned amd64 browser and both the development
-image and GoReleaser OCI archive. The host was an Ubuntu 24.04 amd64 guest,
-Linux 6.8.0-142-generic, with 4 vCPUs and 4 GiB RAM under QEMU on Apple Silicon.
-The HTTP checker ran inside the guest. The development-image suite measured
-4.13 seconds for graceful shutdown and 6.98 seconds for forced cancellation,
-including Docker command overhead, within its twelve-second bound.
-The resource settings in the table above were used unchanged. Local
-`make check` passed with Go 1.27.3 on Darwin/arm64. Tagged publication, Google
-IAM, GHCR visibility, and native GitHub Actions execution remain first-release
-or CI checks.
+The website still sends Worker's `{text, params}` payload and reads raw output.
+It must use `/api/v1/execute`, `source.text`, the outcome envelope, and 429
+handling. Website migration, production deployment, and release tags remain
+separate actions. The earlier API-only artifact is superseded by this packaging.

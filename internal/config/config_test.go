@@ -27,6 +27,43 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestCloudRunPort(t *testing.T) {
+	for _, tc := range []struct {
+		port, listen, want string
+		valid              bool
+	}{
+		{"8087", "", "0.0.0.0:8087", true},
+		{"1", "", "0.0.0.0:1", true},
+		{"65535", "", "0.0.0.0:65535", true},
+		{"", "", "", false},
+		{"0", "", "", false},
+		{"65536", "", "", false},
+		{"+8080", "", "", false},
+		{" 8080", "", "", false},
+		{"secret-invalid-value", "", "", false},
+		{"secret-invalid-value", "127.0.0.1:8081", "127.0.0.1:8081", true},
+	} {
+		cfg, err := Load(func(name string) (string, bool) {
+			if name == "PORT" {
+				return tc.port, true
+			}
+
+			return tc.listen, name == "PLAYGROUND_LISTEN_ADDR" && tc.listen != ""
+		})
+		if (err == nil) != tc.valid {
+			t.Fatalf("PORT validity: %v", err)
+		}
+
+		if err != nil && (!strings.Contains(err.Error(), "PORT") || strings.Contains(err.Error(), "secret-invalid-value")) {
+			t.Fatalf("PORT error was not sanitized: %v", err)
+		}
+
+		if err == nil && cfg.ListenAddr != tc.want {
+			t.Fatalf("listen = %q, want %q", cfg.ListenAddr, tc.want)
+		}
+	}
+}
+
 func TestOverridesAndInvalidValues(t *testing.T) {
 	valid := map[string]string{
 		"PLAYGROUND_MAX_CONCURRENT_EXECUTIONS": "4",

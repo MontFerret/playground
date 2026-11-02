@@ -8,6 +8,7 @@
 - [Formatter regression history and verified fixes](../upstream-formatter-blockers.md)
 - [Local development](../../README.md)
 - [Packaged deployment and enforcement](../deployment.md)
+- [Cloud Run compatibility gate](../cloud-run.md)
 - [Release setup and recovery](../releasing.md)
 
 The agent workflow is in [AGENTS.md](../../AGENTS.md). These guides adapt the

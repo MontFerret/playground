@@ -125,7 +125,7 @@ between writes are synchronous, and the byte limit applies only to emitted text.
 
 Native structured diagnostic kinds determine source rejection versus internal
 failure. Syntax errors use phase `parse`; semantic/name/type/unsupported-source
-errors use `compile` consistently across tooling adapters. Alpha.60 exposes errors, without a warning
+errors use `compile` consistently across tooling adapters. Alpha.61 exposes errors, without a warning
 severity channel or stable diagnostic codes. The adapter invents neither.
 Messages and hints are copied without parsing rendered terminal errors. Ordering
 follows the upstream error tree; the main span is preferred, otherwise the first
@@ -193,3 +193,22 @@ including when it comes from the request context. A disconnected client cancels
 the invocation and may receive no response. Ferret observes cancellation at VM
 safepoints and codec checkpoints. Synchronous compiler phases, host calls, and
 native closure can delay settlement. The service does not retry the run.
+
+## Packaged lifecycle
+
+The API and isolated Chromium run in one container. The launcher verifies the
+renderer sandbox and actual browser-namespace egress before HTTP starts. It
+keeps CDP and proxy sockets private, and fixes the runtime's CDP origin
+internally. Native FQL networking and filesystem access remain disabled.
+
+The packaged listener binds `0.0.0.0:$PORT` when Cloud Run supplies PORT, with an
+explicit PLAYGROUND_LISTEN_ADDR taking precedence. Core development still
+uses loopback by default. HTTP paths, CORS, admission, diagnostics and outcome
+models are unchanged by packaging.
+
+The container permits at most four seconds of HTTP drain and three seconds of
+native cleanup. Browser/proxy processes remain available until the API has
+settled descendants. An absolute 8.5-second container shutdown budget terminates
+remaining process groups. Unexpected essential-child failure shuts down the
+whole container. See [Cloud Run validation](cloud-run.md) for the required live
+platform checks, separately from local packaged verification.

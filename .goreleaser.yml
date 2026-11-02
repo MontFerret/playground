@@ -33,6 +33,9 @@ snapshot:
 publishers:
   - name: registries
     ids: [linux]
-    cmd: bash scripts/release/publish.sh
+    # Extra release files bypass the archive ID filter. Publish the OCI asset once.
+    cmd: '{{ if eq .ArtifactName "playground.oci.tar" }}bash scripts/release/publish.sh{{ else }}true{{ end }}'
     env:
       - GH_TOKEN={{ .Env.GITHUB_TOKEN }}
+      # Custom publishers do not inherit Skopeo's runtime/auth environment.
+      - REGISTRY_AUTH_FILE={{ if isEnvSet "REGISTRY_AUTH_FILE" }}{{ .Env.REGISTRY_AUTH_FILE }}{{ else if isEnvSet "DOCKER_CONFIG" }}{{ .Env.DOCKER_CONFIG }}/config.json{{ else }}{{ .Env.HOME }}/.docker/config.json{{ end }}

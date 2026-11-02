@@ -1,5 +1,13 @@
-FROM alpine:3.23
+FROM ghcr.io/montferret/chromium@sha256:08afea9e2d64b281c4b7e361d8349ac8c2685bee537e947639da66b858def763
+USER 0:0
+LABEL org.opencontainers.image.source="https://github.com/MontFerret/playground" \
+      org.opencontainers.image.title="Ferret Playground API" \
+      org.opencontainers.image.description="Ferret Playground API with isolated Chromium" \
+      org.opencontainers.image.version="devel"
+RUN apt-get update -qq && apt-get install -y --no-install-recommends nftables tini && rm -rf /var/lib/apt/lists/*
+COPY policy.json /etc/opt/chrome/policies/managed/playground.json
+COPY policy.json /etc/chromium/policies/managed/playground.json
 COPY playground /usr/bin/playground
-USER 65532:65532
 EXPOSE 8080
-ENTRYPOINT ["/usr/bin/playground"]
+HEALTHCHECK --interval=2s --timeout=3s --retries=20 CMD ["/usr/bin/playground","container","health"]
+ENTRYPOINT ["/usr/bin/tini","--","/usr/bin/playground","container"]

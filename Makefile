@@ -31,15 +31,16 @@ check: fmt-check vet api-check test test-race build
 
 .PHONY: up down integration release-snapshot
 up:
-	docker compose up --build --wait
+	bash deploy/container/up.sh
 
 down:
-	docker compose down -v --remove-orphans
+	docker rm --force --volumes playground
 
 integration:
 	bash integration/run.sh
 
 release-snapshot:
 	python3 scripts/release/test_publish.py
+	python3 scripts/release/test_goreleaser.py
 	goreleaser check
 	goreleaser release --snapshot --clean

@@ -114,7 +114,7 @@ preserves the primary failure and never delivers partial output.
 Release the output before closing its session, then close the plan before
 releasing admission. A canceled Consume can leave the handle unclaimed, so the
 owner calls Close even after rejected admission. The shared engine outlives all
-of these descendants. Alpha.60 eagerly materializes the encoded VM result in
+of these descendants. Alpha.61 eagerly materializes the encoded VM result in
 Session.Run. Consumer limits bound delivery bytes, while upstream encoding and
 VM allocations depend on the program.
 
@@ -176,7 +176,7 @@ WASM adapter.
 
 ## Hosted browser
 
-The host borrows the Compose-owned CDP service. Each execution lazily owns a
+The runtime host borrows the container launcher's private CDP service. Each execution lazily owns a
 browser context and a separate owner connection with dispose-on-detach enabled.
 Page managers own separate CDP connections, so closing one page preserves its
 siblings. After output and native session cleanup, the browser execution closes
@@ -186,8 +186,20 @@ remains admitted through this cleanup. The HTTP slot wraps the entire operation.
 
 The module registers upstream DOCUMENT only. A run-local driver container carries
 the owned browser execution. Host policy rejects cookie reuse, parse, arbitrary
-drivers and document host settings. The deployment owns the Chromium profile,
-kernel egress rules, manual proxy, and privileged-scheme navigation restrictions.
+drivers and document host settings. The launcher owns a new user/network namespace
+with only loopback. UID rules are installed inside that namespace before Chromium
+starts. Permission-protected Unix sockets bridge the trusted proxy and CDP relay
+to the parent namespace. There is no outer NET_ADMIN or SYS_ADMIN requirement.
+API/proxy workers use UID 65532, Chromium UID 10001, and trusted namespace relays
+UID 10002. Namespace bootstrap root maps to outer UID 65530. The outer root
+supervisor owns identity setup and child termination; it serves no public HTTP.
+The launcher owns the ephemeral profile, fixed proxy, and navigation policy.
+It verifies actual renderer sandbox status and runs direct-connection probes as
+the browser UID in the real namespace before starting HTTP. On termination it
+signals the API first, preserves the browser through native cleanup, and then
+stops the remaining process groups under one fresh 8.5-second budget. Tini reaps
+orphaned descendants. The profile disappears with ephemeral container storage.
+Unexpected essential-child exit follows the same bounded shutdown path.
 See [deployment enforcement](../deployment.md).
 
 The pinned HTML module starts its navigation subscription after Page.navigate,

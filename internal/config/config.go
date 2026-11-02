@@ -75,6 +75,13 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 
 	if value, ok := lookup("PLAYGROUND_LISTEN_ADDR"); ok {
 		cfg.ListenAddr = value
+	} else if value, ok := lookup("PORT"); ok {
+		port, err := strconv.Atoi(value)
+		if err != nil || strings.Trim(value, "0123456789") != "" || port < 1 || port > 65535 {
+			return Config{}, fmt.Errorf("PORT: expected an integer from 1 to 65535")
+		}
+
+		cfg.ListenAddr = net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
 	}
 
 	if strings.TrimSpace(cfg.ListenAddr) != cfg.ListenAddr {

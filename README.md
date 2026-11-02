@@ -6,16 +6,19 @@ environment endpoint to discover the runtime version, capabilities, and limits.
 
 ## Packaged deployment
 
-On native Linux/amd64 with Docker Compose v2.24.4 or later, run:
+On native Linux/amd64 with Docker Engine 25 or later, run:
 
 ```sh
 make up
 ```
 
-This starts the API, sandboxed Chromium, private relay, and restricted egress proxy.
-Only the API port is published. [Deployment and examples](docs/deployment.md)
+This starts one container containing the API, sandboxed Chromium, and their
+private control and egress helpers. Only `127.0.0.1:8080` is published.
+[Deployment and examples](docs/deployment.md)
 covers host prerequisites, resource limits, browser ownership, and the product demo.
 [Release setup and recovery](docs/releasing.md) covers the two registries.
+[Cloud Run validation](docs/cloud-run.md) covers the required second-generation
+compatibility gate before release or production cutover.
 
 ```sh
 make integration       # private fixtures, actual development API image
@@ -107,15 +110,16 @@ configuration flags. Validate all settings before acquiring runtime resources.
 |---|---|---|
 | `PLAYGROUND_MAX_CONCURRENT_EXECUTIONS` | `2` | Non-queued HTTP execution slots, held through cleanup |
 | `PLAYGROUND_ALLOWED_ORIGINS` | `https://ferretlang.org` | Comma-separated exact CORS origins |
-| `PLAYGROUND_CDP_ORIGIN` | unset | Operator-owned private HTTP CDP origin, enables hosted HTML |
-| `PLAYGROUND_LISTEN_ADDR` | `127.0.0.1:8080` | TCP host:port; port 0 selects an available port |
+| `PLAYGROUND_CDP_ORIGIN` | unset in core development | Private HTTP CDP origin; owned and fixed by the container launcher |
+| `PLAYGROUND_LISTEN_ADDR` | `127.0.0.1:8080` in core development | Explicit TCP host:port override; port 0 selects an available port |
+| `PORT` | unset | Without an explicit listen address, binds `0.0.0.0` on this port (1–65535); injected by Cloud Run |
 | `PLAYGROUND_READ_HEADER_TIMEOUT` | `5s` | Time allowed to read request headers |
 | `PLAYGROUND_READ_TIMEOUT` | `10s` | Time allowed to read a complete request |
 | `PLAYGROUND_WRITE_TIMEOUT` | `15s` | HTTP response write deadline |
 | `PLAYGROUND_IDLE_TIMEOUT` | `60s` | Idle keep-alive timeout |
 | `PLAYGROUND_MAX_HEADER_BYTES` | `16384` | `net/http.Server.MaxHeaderBytes` setting |
-| `PLAYGROUND_SHUTDOWN_TIMEOUT` | `5s` | Maximum graceful HTTP drain wait |
-| `PLAYGROUND_CLEANUP_TIMEOUT` | `5s` | Separate maximum admitted-work and runtime cleanup wait |
+| `PLAYGROUND_SHUTDOWN_TIMEOUT` | `5s` core, `4s` container | Maximum graceful HTTP drain wait; container maximum 4s |
+| `PLAYGROUND_CLEANUP_TIMEOUT` | `5s` core, `3s` container | Maximum admitted-work and runtime cleanup wait; container maximum 3s |
 | `PLAYGROUND_MAX_REQUEST_BODY_BYTES` | `1048576` | Maximum POST body bytes, enforced while reading |
 | `PLAYGROUND_MAX_SOURCE_BYTES` | `65536` | Maximum UTF-8 source bytes before native tooling |
 | `PLAYGROUND_MAX_BYTECODE_BYTES` | `1048576` | Maximum returned disassembly text bytes, checked after generation |
@@ -127,7 +131,8 @@ configuration flags. Validate all settings before acquiring runtime resources.
 Durations use Go syntax and must be positive. Header size must be a positive
 integer within the server's integer range. Addresses require a valid host:port
 and numeric port from 0 to 65535. An empty host, as in `:8080`, binds all
-interfaces and must be an explicit operator choice. Environment discovery
+interfaces. The packaged image defaults to `0.0.0.0:8080`; `PORT` selects a
+Cloud Run port, while `PLAYGROUND_LISTEN_ADDR` takes precedence. Environment discovery
 reports effective HTTP, tooling, and execution limits, in fractional milliseconds where needed.
 Byte limits must be positive representable integers below the platform maximum;
 the response limit must be at least 256 bytes so fixed error envelopes fit.
@@ -150,6 +155,9 @@ and contextless `Close()` cannot be forcibly interrupted; a cleanup timeout is r
 failure and the process may exit while admitted work or native cleanup is still
 running. The engine is never closed ahead of admitted work.
 Startup, serving, drain, and cleanup failures produce a nonzero exit status.
+The container launcher keeps the browser alive through API cleanup, stops and
+reaps its helpers, and has an 8.5-second absolute shutdown budget. It exits if
+any essential child fails. Raw browser and proxy diagnostics are discarded.
 
 ## HTTP surface
 
@@ -272,7 +280,7 @@ make check
 Individual targets are `build`, `run`, `test`, `fmt`, `fmt-check`, `vet`,
 `api-check`, and `test-race`. `make check` runs all non-mutating validation targets
 and builds the executable in ignored `bin/`. Contract checks use
-`kin-openapi v0.133.0` only in tests, validating schemas, examples, and actual
+`kin-openapi v0.152.0` only in tests, validating schemas, examples, and actual
 handler responses without fetching external references. CI runs these same
 checks on the Go version declared in go.mod.
 

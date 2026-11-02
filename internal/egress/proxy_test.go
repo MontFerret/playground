@@ -1,4 +1,4 @@
-package main
+package egress
 
 import (
 	"net/http/httptest"

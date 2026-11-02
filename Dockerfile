@@ -5,21 +5,18 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/playground ./cmd/playground && \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/egress ./cmd/egress && \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/browsercheck ./cmd/browsercheck
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/playground ./cmd/playground
 
-FROM alpine:3.23 AS egress
-COPY --from=build /out/egress /usr/bin/egress
-USER 65532:65532
-ENTRYPOINT ["/usr/bin/egress"]
-
-FROM alpine:3.23 AS api
+FROM ghcr.io/montferret/chromium@sha256:08afea9e2d64b281c4b7e361d8349ac8c2685bee537e947639da66b858def763 AS api
+USER 0:0
+LABEL org.opencontainers.image.source="https://github.com/MontFerret/playground" \
+      org.opencontainers.image.title="Ferret Playground API" \
+      org.opencontainers.image.description="Ferret Playground API with isolated Chromium" \
+      org.opencontainers.image.version="devel"
+RUN apt-get update -qq && apt-get install -y --no-install-recommends nftables tini && rm -rf /var/lib/apt/lists/*
+COPY deploy/browser/policy.json /etc/opt/chrome/policies/managed/playground.json
+COPY deploy/browser/policy.json /etc/chromium/policies/managed/playground.json
 COPY --from=build /out/playground /usr/bin/playground
-USER 65532:65532
 EXPOSE 8080
-ENTRYPOINT ["/usr/bin/playground"]
-
-FROM ghcr.io/montferret/chromium@sha256:08afea9e2d64b281c4b7e361d8349ac8c2685bee537e947639da66b858def763 AS relay
-COPY --from=build /out/browsercheck /usr/bin/browsercheck
-USER 10002:10002
+HEALTHCHECK --interval=2s --timeout=3s --retries=20 CMD ["/usr/bin/playground","container","health"]
+ENTRYPOINT ["/usr/bin/tini","--","/usr/bin/playground","container"]

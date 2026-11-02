@@ -8,6 +8,10 @@ info:
     Service and HTTP failures use Error. Source names are diagnostic labels,
     never instructions to open host files. Initial execution is buffered JSON,
     not an HTTP streaming protocol.
+    The packaged image runs the API and isolated Chromium in one container.
+    Its listener honors Cloud Run PORT unless explicitly overridden. The container
+    drains HTTP for at most four seconds, then allows three seconds for native
+    cleanup, before terminating remaining descendants within its shutdown budget.
 servers:
   - url: http://127.0.0.1:8080
 tags:
