@@ -42,8 +42,10 @@ Snapshot descriptors cannot be published by the release publisher.
 ## First-release settings
 
 Create the GitHub `release` environment. Permit deployment from release tags
-only, restrict tag creation to maintainers, and configure these environment
-variables.
+only and restrict tag creation to maintainers. The workflow reads these values
+from the GitHub `secrets` context. The existing organization secrets must grant
+MontFerret/playground access; repository or `release` environment secrets with
+the same names are also supported.
 
 | Name | Value |
 |---|---|
@@ -102,10 +104,11 @@ gcloud iam service-accounts add-iam-policy-binding \
   --member="principalSet://iam.googleapis.com/projects/$project_number/locations/global/workloadIdentityPools/playground-github/attribute.repository/MontFerret/playground"
 ```
 
-The provider variable is
-`projects/<project-number>/locations/global/workloadIdentityPools/playground-github/providers/playground`. Set the provider resource name and service
-account email in the GitHub environment. The workflow uses an access token
-and creates no service-account key file.
+The provider resource name is
+`projects/<project-number>/locations/global/workloadIdentityPools/playground-github/providers/playground`.
+Store that value and the service account email in the corresponding GitHub
+secrets. The workflow uses an access token and creates no service-account key
+file.
 
 Google provisioning and GHCR package visibility are first-release operations.
 They have not been verified against a real release in this change.
