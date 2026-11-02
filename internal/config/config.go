@@ -13,36 +13,38 @@ import (
 // Config contains validated service settings. Environment overrides defaults;
 // explicitly empty values are invalid rather than interpreted as unset.
 type Config struct {
-	ListenAddr          string
-	ReadHeaderTimeout   time.Duration
-	ReadTimeout         time.Duration
-	WriteTimeout        time.Duration
-	IdleTimeout         time.Duration
-	MaxHeaderBytes      int
-	ShutdownTimeout     time.Duration
-	CleanupTimeout      time.Duration
-	MaxRequestBodyBytes int
-	MaxSourceBytes      int
-	MaxBytecodeBytes    int
-	MaxResponseBytes    int
+	ListenAddr              string
+	ReadHeaderTimeout       time.Duration
+	ReadTimeout             time.Duration
+	WriteTimeout            time.Duration
+	IdleTimeout             time.Duration
+	MaxHeaderBytes          int
+	ShutdownTimeout         time.Duration
+	CleanupTimeout          time.Duration
+	MaxRequestBodyBytes     int
+	MaxSourceBytes          int
+	MaxBytecodeBytes        int
+	MaxFormattedSourceBytes int
+	MaxResponseBytes        int
 }
 
 // Load reads only the documented variables through lookup, without acquiring
 // listeners or runtime resources. Errors identify settings, not their contents.
 func Load(lookup func(string) (string, bool)) (Config, error) {
 	cfg := Config{
-		ListenAddr:          "127.0.0.1:8080",
-		ReadHeaderTimeout:   5 * time.Second,
-		ReadTimeout:         10 * time.Second,
-		WriteTimeout:        15 * time.Second,
-		IdleTimeout:         60 * time.Second,
-		MaxHeaderBytes:      16384,
-		ShutdownTimeout:     5 * time.Second,
-		CleanupTimeout:      5 * time.Second,
-		MaxRequestBodyBytes: 1 << 20,
-		MaxSourceBytes:      64 << 10,
-		MaxBytecodeBytes:    1 << 20,
-		MaxResponseBytes:    2 << 20,
+		ListenAddr:              "127.0.0.1:8080",
+		ReadHeaderTimeout:       5 * time.Second,
+		ReadTimeout:             10 * time.Second,
+		WriteTimeout:            15 * time.Second,
+		IdleTimeout:             60 * time.Second,
+		MaxHeaderBytes:          16384,
+		ShutdownTimeout:         5 * time.Second,
+		CleanupTimeout:          5 * time.Second,
+		MaxRequestBodyBytes:     1 << 20,
+		MaxSourceBytes:          64 << 10,
+		MaxBytecodeBytes:        1 << 20,
+		MaxFormattedSourceBytes: 1 << 20,
+		MaxResponseBytes:        2 << 20,
 	}
 
 	if value, ok := lookup("PLAYGROUND_LISTEN_ADDR"); ok {
@@ -108,6 +110,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		{"PLAYGROUND_MAX_REQUEST_BODY_BYTES", &cfg.MaxRequestBodyBytes, 1},
 		{"PLAYGROUND_MAX_SOURCE_BYTES", &cfg.MaxSourceBytes, 1},
 		{"PLAYGROUND_MAX_BYTECODE_BYTES", &cfg.MaxBytecodeBytes, 1},
+		{"PLAYGROUND_MAX_FORMATTED_SOURCE_BYTES", &cfg.MaxFormattedSourceBytes, 1},
 		// Fixed sanitized error envelopes must always fit, including a newline.
 		{"PLAYGROUND_MAX_RESPONSE_BYTES", &cfg.MaxResponseBytes, 256},
 	} {

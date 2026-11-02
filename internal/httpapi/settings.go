@@ -10,6 +10,8 @@ import (
 func httpLimits(cfg config.Config) playground.HTTPLimits {
 	return playground.HTTPLimits{
 		MaxHeaderBytes:      cfg.MaxHeaderBytes,
+		MaxRequestBodyBytes: cfg.MaxRequestBodyBytes,
+		MaxResponseBytes:    cfg.MaxResponseBytes,
 		ReadHeaderTimeoutMs: float64(cfg.ReadHeaderTimeout) / float64(time.Millisecond),
 		ReadTimeoutMs:       float64(cfg.ReadTimeout) / float64(time.Millisecond),
 		WriteTimeoutMs:      float64(cfg.WriteTimeout) / float64(time.Millisecond),

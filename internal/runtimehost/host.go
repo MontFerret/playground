@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/MontFerret/ferret/v2"
+	"github.com/MontFerret/ferret/v2/pkg/formatter"
 	"github.com/MontFerret/ferret/v2/pkg/module"
 	"github.com/MontFerret/ferret/v2/pkg/stdlib"
 
@@ -18,6 +19,7 @@ type (
 	// Host owns its engine. Close it after all users of the host have settled.
 	Host struct {
 		engine      *ferret.Engine
+		formatter   *formatter.Formatter
 		description playground.Runtime
 		closeOnce   sync.Once
 		closeDone   chan struct{}
@@ -70,9 +72,9 @@ func (h *Host) Environment(ctx context.Context) (playground.Runtime, error) {
 	return description, nil
 }
 
-// Close starts native cleanup once and bounds this caller's wait. A timeout
-// does not interrupt native Close, which has no context parameter. Later callers
-// can wait again and observe its retained cleanup result.
+// Close stops tooling admission, waits for active operations and plan cleanup,
+// and then closes the engine once. The context bounds this caller's wait, not
+// native work. Later callers can wait again and observe the retained result.
 func (h *Host) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("close host: context is required")
@@ -106,6 +108,11 @@ func (h *Host) Close(ctx context.Context) error {
 }
 
 func newHost(registrations []registration, info *debug.BuildInfo) (*Host, error) {
+	fmt, err := formatter.New()
+	if err != nil {
+		return nil, err
+	}
+
 	modules := make([]module.Module, len(registrations))
 	metadata := make([]playground.Module, len(registrations))
 	for i, entry := range registrations {
@@ -125,7 +132,8 @@ func newHost(registrations []registration, info *debug.BuildInfo) (*Host, error)
 	}
 
 	return &Host{
-		engine: engine,
+		engine:    engine,
+		formatter: fmt,
 		description: playground.Runtime{
 			Name: "ferret", Version: dependencyVersion(info),
 			StandardLibrary: "safe", Modules: metadata,

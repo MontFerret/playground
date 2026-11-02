@@ -13,7 +13,7 @@ func TestDependencyVersion(t *testing.T) {
 	}{
 		{name: "missing build info"},
 		{name: "unrelated", info: &debug.BuildInfo{Deps: []*debug.Module{{Path: "unrelated", Version: "v9"}}}},
-		{name: "pinned", info: &debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/MontFerret/ferret/v2", Version: "v2.0.0-alpha.58"}}}, want: "v2.0.0-alpha.58"},
+		{name: "pinned", info: &debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/MontFerret/ferret/v2", Version: "v2.0.0-alpha.60"}}}, want: "v2.0.0-alpha.60"},
 		{name: "local replacement", info: &debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/MontFerret/ferret/v2", Version: "v2", Replace: &debug.Module{Path: "/private/local"}}}}},
 		{name: "versioned replacement", info: &debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/MontFerret/ferret/v2", Version: "v2", Replace: &debug.Module{Path: "fork", Version: "v2.1.0"}}}}, want: "v2.1.0"},
 		{name: "development", info: &debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/MontFerret/ferret/v2", Version: "(devel)"}}}},

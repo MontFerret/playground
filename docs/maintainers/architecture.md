@@ -7,25 +7,28 @@
 | `cmd/playground` | Signals, configuration loading, composition, listener startup, cleanup sequencing, exit status |
 | `internal/config` | Documented environment/default precedence and validation before resource acquisition |
 | `internal/httpapi` | Exact routing, JSON envelopes, sanitized request logging, HTTP limits and connection lifecycle |
-| `internal/playground` | Transport-independent environment models |
-| `internal/runtimehost` | Native engine construction, standard-library selection, optional registration metadata, runtime version, resource closure |
+| `internal/playground` | Transport-independent environment, tooling inputs/results, and byte-span diagnostic models |
+| `internal/runtimehost` | Native engine construction, standard-library selection, optional registration metadata, runtime version, native tooling operations, and resource closure |
 | `api` | Checked-in OpenAPI contract and tests against implemented behavior |
 
 HTTP may depend on environment operations and models; runtime composition must
 not depend on HTTP types, status codes, or environment-variable parsing. Avoid
-frameworks or a generic backend interface. The small environment-provider seam
-exists for today's handler and controlled failure testing. The executable's host
-seam tests today's cleanup boundary. Neither anticipates future operation APIs.
+frameworks or a generic backend interface. The small provider seam
+contains the environment, analysis, formatting, and compilation operations used
+by the handler and controlled failure tests. The executable's host
+seam tests today's cleanup boundary. Neither anticipates execution or debugger APIs.
 
 Ferret owns language parsing, diagnostics, compilation, evaluation, and value
-serialization. Future analysis, formatting, and bytecode inspection use native
-APIs because UAPI does not expose them. Reuse portable types where their
+serialization. Analysis and bytecode inspection use native
+APIs because UAPI does not expose them. Formatting calls Ferret's native
+formatter directly. Reuse portable types where their
 semantics fit, including `api.Version`; do not force unsupported behavior
 through UAPI or duplicate Ferret implementation details.
 
 ## Initialization and metadata
 
-Startup validates configuration, constructs a native engine, opens the listener,
+Startup validates configuration, constructs an immutable native formatter with
+default options before acquiring the native engine, opens the listener,
 and begins serving. The engine uses `ferret.New` with `stdlib.Safe()` and no
 optional modules. The selected profile label and construction option live
 together. Optional-module metadata is constructed from the same registration
@@ -48,11 +51,48 @@ service construction does not issue a request. Safe standard-library selection
 excludes IO functions but is not a security boundary for a future arbitrary
 execution service. No request can configure these host services.
 
-Capabilities are owned by working HTTP behavior. In this foundation only
-environment discovery is true; compilation options and inspection arrays stay
-empty. HTTP settings are reported from the same validated configuration used by
-the server. Future execution, source-size, output, and concurrency limits must
-not appear until implemented.
+Capabilities are owned by working HTTP behavior. Environment discovery, analysis,
+formatting, and compilation are enabled.
+Supported optimization/artifact constants and effective defaults are shared with
+request validation and native mapping. HTTP and tooling limits are reported from
+the same validated settings used for enforcement.
+
+## Tooling operations
+
+Analysis and compilation share one Engine.Compile path against the initialized
+host. Analysis uses full optimization and renders no artifacts. Compilation uses
+explicit native per-plan options. The compiler does not bind host functions or
+parameter values in alpha.60.
+No operation creates a session or executes a program.
+
+The temporary plan owns the compiled program. Parameter metadata uses Plan.Params
+in native first-seen order. Requested bytecode uses Plan.Marshal followed by
+artifact.Unmarshal and asm.Disassemble because no public plan program accessor
+exists. This supported materialization avoids private access or a second compile;
+it runs only when requested. Returned data is detached and plans close on every
+exit path. Native compilation alone is timed, before artifact generation/cleanup.
+
+Runtime diagnostic extraction walks structured errors in order and separates
+source errors from internal or mixed failures. It retains messages, hints, source
+labels, and native byte spans without causes or stack-bearing diagnostics. HTTP
+owns UTF-16 conversion and optional ranges. The pinned API exposes errors without
+stable diagnostic codes or warning severity; no such data is invented.
+
+HTTP bounds each request body and checks the source size before calling the host.
+Disassembly and JSON encoding have response-size checks after materialization,
+not allocation caps. Oversized output is a service limit error, never invalid FQL
+or silently truncated success. Request contexts reach native compilation and are
+checked between stages, without detached worker goroutines or hard preemption.
+
+Formatting uses the shared immutable formatter, with request-local source,
+diagnostics, and output. It creates no plan or session and performs no semantic
+name resolution. A writer bounds retained bytes and observes context cancellation
+on each write, latching its first failure; all partial output is discarded on
+error. Native internal failures stay internal even if their cause resembles a
+writer cancellation. Native parsing and work between writes are not preemptible.
+The formatter has no closeable resources but its admitted work participates in
+host shutdown. Environment discovery advertises the same output limit passed to
+the formatter on each request.
 
 ## Ownership and shutdown
 
@@ -67,27 +107,31 @@ HTTP serving ends, close the host under a separate fresh bounded context,
 joining serving and cleanup failures. Defaults permit five seconds for each
 phase. Do not derive cleanup contexts from canceled serving contexts.
 
-The host starts native cleanup in a single goroutine, publishes the retained
+Host closure locks admission, rejects new tooling work, and starts a single
+cleanup goroutine. It waits for all admitted operations (including plan cleanup)
+before calling engine.Close, then publishes the retained
 result through a closed channel, and permits concurrent or repeated waiters.
 Expiry bounds the caller's wait, not the native operation. No context-aware
 native close exists, so a timed-out process cannot promise completed release.
 Later in-process callers can still wait for the same cleanup result.
 
-Future native work must settle outputs, sessions, and plans before engine
-closure; force-closing an HTTP connection alone does not prove native work has
-settled. Keep that coordination with the layer that creates those descendants.
+The admission mutex serializes WaitGroup additions with the closing transition;
+active work always settles before engine closure, even after a cleanup waiter
+times out. Force-closing an HTTP connection alone does not prove native work has
+settled. Future execution must extend ownership ordering to outputs and sessions.
 
 ## Upstream integration gaps
 
-Verified against Ferret `v2.0.0-alpha.58` and API `v1.0.0-alpha.21`:
+Verified against Ferret `v2.0.0-alpha.60` and API `v1.0.0-alpha.21`.
 
 - Native `Engine` has no release-version query. UAPI `New`/`Wrap` require the host
   to supply the opaque Core version. Dependency build metadata is the source
   used here, without creating an otherwise-unused adapter.
 - UAPI has execution/compilation interfaces, but no analysis, source formatter,
-  or bytecode inspection interface. Native `Compiler.Analyze`, `Formatter.Format`,
-  compiled parameter metadata, and Program JSON are the relevant future APIs.
-- Native analysis and formatting take no context. Compiler cancellation is
+  or bytecode inspection interface. Native Engine.Compile, Plan.Params, the
+  artifact codec, and asm.Disassemble supply implemented tooling. Standalone
+  Compiler.Analyze is not used because the service shares its host compile path.
+- Standalone native analysis and formatting take no context. Compiler cancellation is
   checked between synchronous phases rather than preempting each phase.
 - Native engine cleanup takes no context and does not settle caller-owned
   descendants. This host bounds its wait and documents the limitation.
@@ -97,11 +141,9 @@ Verified against Ferret `v2.0.0-alpha.58` and API `v1.0.0-alpha.21`:
 - UAPI defines aggressive optimization, but its Ferret adapter rejects it.
 - Native diagnostic positions are not the HTTP UTF-16 coordinate contract;
   portable diagnostics do not directly supply every HTTP diagnostic field.
-- The selected native formatter's panic recovery records an internal diagnostic
-  without a named returned error. Before enabling formatting, investigate error
-  observability and ensure recovered internal failures cannot become false
-  success or expose stack-bearing diagnostic text. No upstream changes are made
-  in this foundation.
+- Plan has no program accessor; inspection currently requires a supported
+  serialize/decode round trip. Disassemble returns a complete string and exposes
+  neither a writer limit nor cancellation. These costs and bounds are explicit.
 
 The [HTTP guide](../http-contract.md) records the boundary behavior that future
 operation implementations must uphold. Public request data never controls host

@@ -4,7 +4,7 @@ go 1.25
 
 require (
 	github.com/MontFerret/api v1.0.0-alpha.21
-	github.com/MontFerret/ferret/v2 v2.0.0-alpha.58
+	github.com/MontFerret/ferret/v2 v2.0.0-alpha.60
 	github.com/getkin/kin-openapi v0.133.0
 )
 

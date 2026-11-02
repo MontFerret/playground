@@ -5,6 +5,7 @@
 - [Go code style](engineering/code-style.md)
 - [Testing and validation](engineering/testing.md)
 - [HTTP contract and planned behavior](../http-contract.md)
+- [Formatter regression history and verified fixes](../upstream-formatter-blockers.md)
 - [Local development](../../README.md)
 
 The agent workflow is in [AGENTS.md](../../AGENTS.md). These guides adapt the

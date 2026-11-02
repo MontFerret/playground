@@ -4,15 +4,16 @@ info:
   version: v1
   description: >-
     REST contract version, independent of service and runtime versions.
-    Only environment discovery is implemented. All POST operations below are
-    planned and currently return 404. Program outcomes use operation models;
-    service and HTTP failures use Error. Source names are diagnostic labels,
+    Environment discovery, analysis, formatting, and compilation are implemented.
+    Execution is planned. Program outcomes use operation models.
+    Service and HTTP failures use Error. Source names are diagnostic labels,
     never instructions to open host files. Initial execution is buffered JSON,
     not an HTTP streaming protocol.
 servers:
   - url: http://127.0.0.1:8080
 tags:
   - name: Environment
+  - name: Tooling
   - name: Planned
     description: Specified first-release behavior; not currently registered.
 paths:
@@ -28,7 +29,7 @@ paths:
         HEAD error responses have no body. Unknown paths receive Error with 404.
       responses:
         '200':
-          description: Actual initialized host and effective HTTP settings
+          description: Initialized runtime, capabilities, and effective HTTP and tooling limits
           content:
             application/json:
               schema:
@@ -38,53 +39,65 @@ paths:
                 service: {name: ferret-playground, version: null}
                 runtime:
                   name: ferret
-                  version: v2.0.0-alpha.58
+                  version: v2.0.0-alpha.60
                   standardLibrary: safe
                   modules: []
                 capabilities:
                   environment: true
-                  analyze: false
-                  format: false
-                  compile: false
+                  analyze: true
+                  format: true
+                  compile: true
                   execute: false
                   debug: false
                   functionCatalog: false
-                  optimizationLevels: []
-                  inspectionArtifacts: []
+                  optimizationLevels: [none, basic, full]
+                  defaultOptimization: full
+                  inspectionArtifacts: [bytecode, parameters]
                 limits:
                   http:
                     maxHeaderBytes: 16384
+                    maxRequestBodyBytes: 1048576
+                    maxResponseBytes: 2097152
                     readHeaderTimeoutMs: 5000
                     readTimeoutMs: 10000
                     writeTimeoutMs: 15000
                     idleTimeoutMs: 60000
+                  tooling:
+                    maxSourceBytes: 65536
+                    maxBytecodeBytes: 1048576
+                    maxFormattedSourceBytes: 1048576
         '404':
           $ref: '#/components/responses/NotFound'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+        '408':
+          $ref: '#/components/responses/RequestCanceled'
+        '422':
+          $ref: '#/components/responses/ResponseTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
   /api/v1/analyze:
     post:
       operationId: analyzeSource
-      tags: [Planned]
-      summary: 'Planned: diagnostics without execution'
-      x-implementation-status: planned
+      tags: [Tooling]
+      summary: Native compilation checks without execution
+      x-implementation-status: implemented
       description: >-
-        Not implemented; currently returns 404. Future decoding follows the
-        strict JSON policy in SourceRequest. Native analysis is required;
-        UAPI does not expose this operation. Native Analyze has no context
-        parameter, so this contract promises no hard preemption deadline.
+        Performs the checks available through native compilation, using full
+        optimization, and closes the temporary plan. Does not bind parameter
+        values or resolve host functions; ok does not prove runtime success.
+        No program is executed. Cancellation is checked between synchronous
+        phases, which cannot be forcibly interrupted.
       requestBody:
         $ref: '#/components/requestBodies/Source'
       responses:
         '200':
-          description: Planned analysis outcome; invalid source is not an HTTP failure
+          description: Analysis outcome; invalid source is not an HTTP failure
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AnalysisResponse'
-              example: {outcome: ok, diagnostics: []}
+              example: {status: ok, diagnostics: []}
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -95,8 +108,10 @@ paths:
           $ref: '#/components/responses/TooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestCanceled'
+        '422':
+          $ref: '#/components/responses/ResponseTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -104,22 +119,25 @@ paths:
   /api/v1/format:
     post:
       operationId: formatSource
-      tags: [Planned]
-      summary: 'Planned: canonical source formatting'
-      x-implementation-status: planned
+      tags: [Tooling]
+      summary: Format FQL with native defaults
+      x-implementation-status: implemented
       description: >-
-        Not implemented; currently returns 404. Uses native formatter defaults.
-        Native Format has no context parameter; no hard preemption is promised.
+        Accepts source only. Formats without compiling, resolving host functions,
+        or executing FQL. Success includes the complete formattedSource string.
+        Syntax errors return invalid with structured diagnostics. Cancellation and
+        the formatted-source byte limit are checked during writes. Partial output
+        is discarded on failure.
       requestBody:
         $ref: '#/components/requestBodies/Source'
       responses:
         '200':
-          description: Planned formatting outcome
+          description: Complete formatted source on success or diagnostics for invalid FQL
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FormatResponse'
-              example: {outcome: ok, diagnostics: [], formattedSource: 'RETURN 1'}
+              example: {status: ok, diagnostics: [], formattedSource: 'return 1'}
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -130,8 +148,10 @@ paths:
           $ref: '#/components/responses/TooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestCanceled'
+        '422':
+          $ref: '#/components/responses/ResponseTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -139,13 +159,19 @@ paths:
   /api/v1/compile:
     post:
       operationId: compileSource
-      tags: [Planned]
-      summary: 'Planned: compilation and requested inspection artifacts'
-      x-implementation-status: planned
+      tags: [Tooling]
+      summary: Compile once and return requested inspection artifacts
+      x-implementation-status: implemented
       description: >-
-        Not implemented; currently returns 404. Compiler-specific artifacts use
-        native APIs, not an invented UAPI inspection interface. Bytecode JSON
-        must be serialized by Ferret and is specific to the runtime version.
+        Uses the configured native engine without execution or parameter binding.
+        include accepts bytecode and parameters, without duplicate names; omitted
+        or empty include yields artifacts: {}. Parameter names are distinct and
+        ordered by native first encounter, with no inferred types or requiredness.
+        Bytecode is upstream text disassembly, specific to the runtime version.
+        Ferret materializes the full disassembly before the byte limit is checked;
+        this is a response-size limit, not an allocation bound. Oversized artifacts
+        or encoded responses receive 422, without truncation. compileMs measures
+        native compilation only, excluding artifact rendering and plan closure.
       requestBody:
         required: true
         content:
@@ -155,15 +181,15 @@ paths:
             example:
               source: {text: 'RETURN @value', name: example.fql}
               options: {optimization: full}
-              inspect: [parameters]
+              include: [parameters, bytecode]
       responses:
         '200':
-          description: Planned compilation outcome
+          description: Compilation outcome
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CompileResponse'
-              example: {outcome: ok, diagnostics: [], artifacts: {parameters: [value]}}
+              example: {status: ok, diagnostics: [], artifacts: {parameters: [value], bytecode: {format: text, text: "<native disassembly>"}}, timings: {compileMs: 0.4}}
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -174,8 +200,10 @@ paths:
           $ref: '#/components/responses/TooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestCanceled'
+        '422':
+          $ref: '#/components/responses/ResponseTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -249,7 +277,7 @@ components:
           example: {source: {text: 'RETURN 1', name: example.fql}}
   responses:
     BadRequest:
-      description: Malformed JSON, trailing JSON documents, unknown fields, or invalid request options (planned POST policy)
+      description: Malformed JSON, trailing documents, null/missing required values, duplicate or unknown fields, or invalid options
       content:
         application/json:
           schema:
@@ -275,17 +303,31 @@ components:
             $ref: '#/components/schemas/Error'
           example: {error: {code: method_not_allowed, message: This route supports GET.}}
     TooLarge:
-      description: Future POST body exceeds its configured finite byte limit
+      description: Request body or UTF-8 source exceeds its configured byte limit
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     UnsupportedMediaType:
-      description: Future POST requires application/json, optionally with charset=utf-8
+      description: POST requires application/json, optionally with charset=utf-8
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    RequestCanceled:
+      description: Request canceled or deadline expired; synchronous native phases are not preempted, and disconnected clients may receive no response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example: {error: {code: request_canceled, message: The request was canceled.}}
+    ResponseTooLarge:
+      description: Formatted source, a generated artifact, or the complete JSON response exceeds its byte limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example: {error: {code: response_too_large, message: The generated response exceeds the configured limit.}}
     RateLimited:
       description: Reserved for future admission controls; no rate limiter is currently installed
       headers:
@@ -304,7 +346,7 @@ components:
             $ref: '#/components/schemas/Error'
           example: {error: {code: internal_error, message: The service could not complete the request.}}
     Unavailable:
-      description: Service temporarily unavailable (reserved for future operations)
+      description: Runtime is closing and cannot admit tooling work
       content:
         application/json:
           schema:
@@ -340,10 +382,12 @@ components:
         limits:
           type: object
           additionalProperties: false
-          required: [http]
+          required: [http, tooling]
           properties:
             http:
               $ref: '#/components/schemas/HTTPLimits'
+            tooling:
+              $ref: '#/components/schemas/ToolingLimits'
     Module:
       type: object
       additionalProperties: false
@@ -354,8 +398,8 @@ components:
     Capabilities:
       type: object
       additionalProperties: false
-      required: [environment, analyze, format, compile, execute, debug, functionCatalog, optimizationLevels, inspectionArtifacts]
-      description: Only environment is currently true; both option arrays are empty while compile is unavailable
+      required: [environment, analyze, format, compile, execute, debug, functionCatalog, optimizationLevels, defaultOptimization, inspectionArtifacts]
+      description: Environment discovery, analysis, formatting, and compilation are available
       properties:
         environment: {type: boolean}
         analyze: {type: boolean}
@@ -369,6 +413,8 @@ components:
           uniqueItems: true
           items:
             $ref: '#/components/schemas/Optimization'
+        defaultOptimization:
+          $ref: '#/components/schemas/Optimization'
         inspectionArtifacts:
           type: array
           uniqueItems: true
@@ -377,14 +423,24 @@ components:
     HTTPLimits:
       type: object
       additionalProperties: false
-      required: [maxHeaderBytes, readHeaderTimeoutMs, readTimeoutMs, writeTimeoutMs, idleTimeoutMs]
+      required: [maxHeaderBytes, maxRequestBodyBytes, maxResponseBytes, readHeaderTimeoutMs, readTimeoutMs, writeTimeoutMs, idleTimeoutMs]
       description: Configured net/http settings, not execution limits; maxHeaderBytes is the server field, not an exact wire-byte cap
       properties:
         maxHeaderBytes: {type: integer, minimum: 1}
+        maxRequestBodyBytes: {type: integer, minimum: 1, description: "POST body bytes enforced while reading"}
+        maxResponseBytes: {type: integer, minimum: 256, description: "Complete encoded application JSON bytes including newline; checked after encoding"}
         readHeaderTimeoutMs: {type: number, minimum: 0, exclusiveMinimum: true}
         readTimeoutMs: {type: number, minimum: 0, exclusiveMinimum: true}
         writeTimeoutMs: {type: number, minimum: 0, exclusiveMinimum: true}
         idleTimeoutMs: {type: number, minimum: 0, exclusiveMinimum: true}
+    ToolingLimits:
+      type: object
+      additionalProperties: false
+      required: [maxSourceBytes, maxBytecodeBytes, maxFormattedSourceBytes]
+      properties:
+        maxSourceBytes: {type: integer, minimum: 1, description: "UTF-8 source bytes checked before native tooling"}
+        maxBytecodeBytes: {type: integer, minimum: 1, description: "Disassembly text bytes checked after upstream materialization; not an allocation bound"}
+        maxFormattedSourceBytes: {type: integer, minimum: 1, description: "Maximum UTF-8 bytes of formatted source, enforced during writing before JSON encoding"}
     Source:
       type: object
       additionalProperties: false
@@ -398,12 +454,11 @@ components:
       additionalProperties: false
       required: [source]
       description: >-
-        Planned POST policy: a finite byte limit enforced while reading, including
-        chunked bodies; application/json with no charset or charset=utf-8;
-        one non-null JSON object only; reject malformed or trailing documents,
-        unknown request fields, missing fields, and unsupported enum values.
-        Bind-parameter object keys and engine-owned artifact fields are open.
-        No input/body limit is currently advertised or enforced by a POST handler.
+        Finite body limit enforced while reading, including chunked requests;
+        application/json with no parameter or charset=utf-8; one non-null JSON
+        object only. Reject malformed or trailing documents, unknown or duplicate
+        object fields, null/missing source text, and unsupported options.
+        Property names are case-sensitive. Omitted source name uses anonymous.
       properties:
         source:
           $ref: '#/components/schemas/Source'
@@ -430,18 +485,19 @@ components:
       additionalProperties: false
       required: [line, character]
       properties:
-        line: {type: integer, minimum: 0, description: Zero-based line}
-        character: {type: integer, minimum: 0, description: Zero-based UTF-16 code units within the line}
+        line: {type: integer, minimum: 0, description: "Zero-based line"}
+        character: {type: integer, minimum: 0, description: "Zero-based UTF-16 code units within the line"}
     Location:
       type: object
       additionalProperties: false
-      required: [source, range]
+      required: [source]
       description: >-
         Source identity is the submitted display name (or anonymous when omitted).
         Native one-based UTF-8 byte columns and byte spans must be converted
         using the submitted text. Do not pass UAPI's producer-defined locations
         straight through. CRLF is one line break; supplementary code points use
         two UTF-16 units. The range end is exclusive, including zero-width EOF ranges.
+        Omit range when upstream provides no usable span; retain source identity.
       properties:
         source: {type: string}
         range:
@@ -461,7 +517,7 @@ components:
         severity: {type: string, enum: [error, warning, info]}
         phase: {type: string, enum: [parse, analyze, format, compile, execute, output]}
         message: {type: string}
-        code: {type: string, description: Optional stable engine code; do not derive codes from message text}
+        code: {type: string, description: "Optional stable engine code; do not derive codes from message text"}
         location:
           $ref: '#/components/schemas/Location'
         hint: {type: string}
@@ -487,7 +543,7 @@ components:
           $ref: '#/components/schemas/Optimization'
     InspectionArtifact:
       type: string
-      enum: [parameters, bytecode]
+      enum: [bytecode, parameters]
     CompileRequest:
       type: object
       additionalProperties: false
@@ -497,10 +553,11 @@ components:
           $ref: '#/components/schemas/Source'
         options:
           $ref: '#/components/schemas/CompilationOptions'
-        inspect:
+        include:
           type: array
           uniqueItems: true
           default: []
+          description: Only requested artifacts are returned; duplicate names are invalid
           items:
             $ref: '#/components/schemas/InspectionArtifact'
     ExecuteRequest:
@@ -517,17 +574,17 @@ components:
     AnalysisResponse:
       type: object
       additionalProperties: false
-      required: [outcome, diagnostics]
+      required: [status, diagnostics]
       properties:
-        outcome: {type: string, enum: [ok, invalid]}
+        status: {type: string, enum: [ok, invalid]}
         diagnostics:
           $ref: '#/components/schemas/Diagnostics'
     InvalidResponse:
       type: object
       additionalProperties: false
-      required: [outcome, diagnostics]
+      required: [status, diagnostics]
       properties:
-        outcome: {type: string, enum: [invalid]}
+        status: {type: string, enum: [invalid]}
         diagnostics:
           $ref: '#/components/schemas/Diagnostics'
     FormatResponse:
@@ -537,36 +594,59 @@ components:
     FormatSuccess:
       type: object
       additionalProperties: false
-      required: [outcome, diagnostics, formattedSource]
+      required: [status, diagnostics, formattedSource]
       properties:
-        outcome: {type: string, enum: [ok]}
+        status: {type: string, enum: [ok]}
         diagnostics:
           $ref: '#/components/schemas/Diagnostics'
         formattedSource: {type: string}
     CompileResponse:
       oneOf:
         - $ref: '#/components/schemas/CompileSuccess'
-        - $ref: '#/components/schemas/InvalidResponse'
+        - $ref: '#/components/schemas/CompileInvalid'
     CompileSuccess:
       type: object
       additionalProperties: false
-      required: [outcome, diagnostics, artifacts]
+      required: [status, diagnostics, artifacts, timings]
       properties:
-        outcome: {type: string, enum: [ok]}
+        status: {type: string, enum: [ok]}
         diagnostics:
           $ref: '#/components/schemas/Diagnostics'
         artifacts:
           type: object
           additionalProperties: false
-          description: Only requested artifacts are returned; parameters is the bind-parameter name list
+          description: Only requested entries; an empty include returns an empty object
           properties:
             parameters:
               type: array
+              uniqueItems: true
+              description: Referenced bind-parameter names in native first-seen order, without types, values, defaults, or requiredness; requested empty metadata is []
               items: {type: string}
             bytecode:
               type: object
-              additionalProperties: true
-              description: Native Ferret Program JSON; opaque to this service and specific to the reported runtime version
+              additionalProperties: false
+              required: [format, text]
+              properties:
+                format: {type: string, enum: [text]}
+                text: {type: string, description: "Opaque upstream disassembly display text, specific to the runtime version"}
+        timings:
+          $ref: '#/components/schemas/CompileTimings'
+    CompileInvalid:
+      type: object
+      additionalProperties: false
+      required: [status, diagnostics, timings]
+      properties:
+        status: {type: string, enum: [invalid]}
+        diagnostics:
+          $ref: '#/components/schemas/Diagnostics'
+        timings:
+          $ref: '#/components/schemas/CompileTimings'
+    CompileTimings:
+      type: object
+      additionalProperties: false
+      required: [compileMs]
+      properties:
+        compileMs: {type: number, minimum: 0, description: "Monotonic elapsed native Engine.Compile milliseconds, including its hooks, excluding source construction, artifacts, and plan cleanup"}
     Timings:
       type: object
       additionalProperties: false
@@ -618,5 +698,5 @@ components:
           properties:
             code:
               type: string
-              enum: [invalid_request, not_found, method_not_allowed, request_too_large, unsupported_media_type, rate_limited, internal_error, service_unavailable]
+              enum: [invalid_request, not_found, method_not_allowed, request_too_large, unsupported_media_type, request_canceled, request_timeout, response_too_large, rate_limited, internal_error, service_unavailable]
             message: {type: string, minLength: 1}

@@ -18,6 +18,7 @@ func TestDefaults(t *testing.T) {
 		ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second,
 		IdleTimeout: time.Minute, MaxHeaderBytes: 16384,
 		ShutdownTimeout: 5 * time.Second, CleanupTimeout: 5 * time.Second,
+		MaxRequestBodyBytes: 1 << 20, MaxSourceBytes: 64 << 10, MaxBytecodeBytes: 1 << 20, MaxFormattedSourceBytes: 1 << 20, MaxResponseBytes: 2 << 20,
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("defaults = %+v, want %+v", cfg, want)
@@ -30,6 +31,8 @@ func TestOverridesAndInvalidValues(t *testing.T) {
 		"PLAYGROUND_READ_HEADER_TIMEOUT": "1ns", "PLAYGROUND_READ_TIMEOUT": "2s",
 		"PLAYGROUND_WRITE_TIMEOUT": "3s", "PLAYGROUND_IDLE_TIMEOUT": "4s",
 		"PLAYGROUND_SHUTDOWN_TIMEOUT": "6s", "PLAYGROUND_CLEANUP_TIMEOUT": "7s",
+		"PLAYGROUND_MAX_REQUEST_BODY_BYTES": "1024", "PLAYGROUND_MAX_SOURCE_BYTES": "512",
+		"PLAYGROUND_MAX_FORMATTED_SOURCE_BYTES": "3072", "PLAYGROUND_MAX_BYTECODE_BYTES": "2048", "PLAYGROUND_MAX_RESPONSE_BYTES": "4096",
 	}
 	cfg, err := Load(func(name string) (string, bool) {
 		value, ok := valid[name]
@@ -42,6 +45,10 @@ func TestOverridesAndInvalidValues(t *testing.T) {
 
 	if cfg.ListenAddr != "[::1]:0" || cfg.MaxHeaderBytes != 8192 || cfg.ReadHeaderTimeout != time.Nanosecond || cfg.ReadTimeout != 2*time.Second || cfg.WriteTimeout != 3*time.Second || cfg.IdleTimeout != 4*time.Second || cfg.ShutdownTimeout != 6*time.Second || cfg.CleanupTimeout != 7*time.Second {
 		t.Fatalf("overrides not applied: %+v", cfg)
+	}
+
+	if cfg.MaxRequestBodyBytes != 1024 || cfg.MaxSourceBytes != 512 || cfg.MaxBytecodeBytes != 2048 || cfg.MaxFormattedSourceBytes != 3072 || cfg.MaxResponseBytes != 4096 {
+		t.Fatalf("tooling limits not applied: %+v", cfg)
 	}
 
 	for name := range valid {
@@ -66,6 +73,25 @@ func TestOverridesAndInvalidValues(t *testing.T) {
 					t.Fatal("error exposed configuration contents")
 				}
 			})
+		}
+	}
+}
+
+func TestToolingLimitBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name, value string
+		valid       bool
+	}{
+		{"PLAYGROUND_MAX_RESPONSE_BYTES", "255", false},
+		{"PLAYGROUND_MAX_RESPONSE_BYTES", "256", true},
+		{"PLAYGROUND_MAX_REQUEST_BODY_BYTES", "1", true},
+		{"PLAYGROUND_MAX_SOURCE_BYTES", "1", true},
+		{"PLAYGROUND_MAX_BYTECODE_BYTES", "1", true},
+		{"PLAYGROUND_MAX_FORMATTED_SOURCE_BYTES", "1", true},
+	} {
+		_, err := Load(func(name string) (string, bool) { return test.value, name == test.name })
+		if (err == nil) != test.valid {
+			t.Errorf("%s boundary valid=%v: %v", test.name, test.valid, err)
 		}
 	}
 }

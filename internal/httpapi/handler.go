@@ -14,14 +14,18 @@ import (
 type (
 	// Handler serves only the operations implemented by this service.
 	Handler struct {
-		provider environmentProvider
-		service  playground.Service
-		limits   playground.HTTPLimits
-		logger   *slog.Logger
+		provider      toolingProvider
+		service       playground.Service
+		limits        playground.HTTPLimits
+		logger        *slog.Logger
+		toolingLimits playground.ToolingLimits
 	}
 
-	environmentProvider interface {
+	toolingProvider interface {
 		Environment(context.Context) (playground.Runtime, error)
+		Analyze(context.Context, playground.Source) (playground.AnalysisResult, error)
+		Format(context.Context, playground.Source, playground.FormatOptions) (playground.FormatResult, error)
+		Compile(context.Context, playground.Source, playground.CompileOptions) (playground.CompileResult, error)
 	}
 
 	errorEnvelope struct {
@@ -41,7 +45,7 @@ type (
 
 // New borrows provider for the handler's lifetime. Metadata is copied; it must
 // describe the same effective settings installed on the HTTP server.
-func New(provider environmentProvider, service playground.Service, cfg config.Config, logger *slog.Logger) *Handler {
+func New(provider toolingProvider, service playground.Service, cfg config.Config, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -51,7 +55,10 @@ func New(provider environmentProvider, service playground.Service, cfg config.Co
 		service.Version = &version
 	}
 
-	return &Handler{provider: provider, service: service, limits: httpLimits(cfg), logger: logger}
+	return &Handler{
+		provider: provider, service: service, limits: httpLimits(cfg), logger: logger,
+		toolingLimits: playground.ToolingLimits{MaxSourceBytes: cfg.MaxSourceBytes, MaxBytecodeBytes: cfg.MaxBytecodeBytes, MaxFormattedSourceBytes: cfg.MaxFormattedSourceBytes},
+	}
 }
 
 // ServeHTTP routes exact paths and uses one public error envelope. HEAD is not
@@ -78,23 +85,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(response, r, http.StatusInternalServerError, "internal_error", "The service could not complete the request.")
 	}()
 
-	if r.URL.Path != "/api/v1/environment" {
+	method := http.MethodPost
+	switch r.URL.Path {
+	case "/api/v1/environment":
+		method = http.MethodGet
+	case "/api/v1/analyze", "/api/v1/format", "/api/v1/compile":
+	default:
 		h.writeError(response, r, http.StatusNotFound, "not_found", "The requested route does not exist.")
 
 		return
 	}
 
-	if r.Method != http.MethodGet {
-		response.Header().Set("Allow", http.MethodGet)
-		h.writeError(response, r, http.StatusMethodNotAllowed, "method_not_allowed", "This route supports GET.")
+	if r.Method != method {
+		response.Header().Set("Allow", method)
+		h.writeError(response, r, http.StatusMethodNotAllowed, "method_not_allowed", "This route supports "+method+".")
+
+		return
+	}
+
+	if method == http.MethodPost {
+		h.serveTooling(response, r)
 
 		return
 	}
 
 	description, err := h.provider.Environment(r.Context())
 	if err != nil {
-		h.logger.Error("Environment discovery failed", "code", "internal_error")
-		h.writeError(response, r, http.StatusInternalServerError, "internal_error", "The service could not describe its environment.")
+		h.writeOperationError(response, r, err)
 
 		return
 	}
@@ -102,9 +119,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(response, r, http.StatusOK, playground.Environment{
 		APIVersion: "v1", Service: h.service, Runtime: description,
 		Capabilities: playground.Capabilities{
-			Environment: true, OptimizationLevels: []string{}, InspectionArtifacts: []string{},
+			Environment: true, Analyze: true, Format: true, Compile: true,
+			OptimizationLevels: playground.OptimizationLevels(), DefaultOptimization: playground.DefaultOptimization,
+			InspectionArtifacts: playground.InspectionArtifacts(),
 		},
-		Limits: playground.Limits{HTTP: h.limits},
+		Limits: playground.Limits{HTTP: h.limits, Tooling: h.toolingLimits},
 	})
 }
 
@@ -135,6 +154,19 @@ func (h *Handler) writeJSON(w http.ResponseWriter, r *http.Request, status int, 
 		h.logger.Error("HTTP response encoding failed", "code", "internal_error")
 		status = http.StatusInternalServerError
 		body = []byte(`{"error":{"code":"internal_error","message":"The service could not encode its response."}}`)
+	}
+
+	// This is a wire-response limit, including the newline. encoding/json has
+	// already materialized the document; it is not an encoding allocation cap.
+	if len(body) >= h.limits.MaxResponseBytes {
+		status = http.StatusUnprocessableEntity
+		body = []byte(`{"error":{"code":"response_too_large","message":"The generated response exceeds the configured limit."}}`)
+	}
+
+	if status == http.StatusOK && r.Context().Err() != nil {
+		h.writeOperationError(w, r, r.Context().Err())
+
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

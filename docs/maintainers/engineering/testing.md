@@ -41,3 +41,31 @@ Capture before/after evidence under the same environment and command, comparing
 `ns/op`, `B/op`, and `allocs/op` where available. Investigate regressions and
 report commands and results accurately. Documentation, ordinary metadata
 handling, and foundation wiring do not require speculative benchmarks.
+
+Tooling has a focused native-versus-service comparison for compilation and
+requested inspection. It warms native parser prediction state before timing:
+
+```sh
+go test ./internal/runtimehost -run '^$' -bench '^BenchmarkTooling$' -benchmem -benchtime=500ms -count=10
+```
+
+Both variants construct source, compile once, produce the same requested native
+artifacts, and close the plan. This isolates runtime adapter overhead; it does
+not measure HTTP latency or establish a historical endpoint baseline. Record
+the machine/toolchain, medians, bytes, and allocations; avoid treating noisy
+single samples as regressions or claiming a guarantee from the comparison.
+
+The formatting adapter has its own native-versus-service comparison.
+
+```sh
+go test ./internal/runtimehost -run '^$' -bench '^BenchmarkFormat$' -benchmem -benchtime=500ms -count=10
+```
+
+Both variants warm parser state, construct the same source, and format to a string
+using one shared native formatter. Service measurements include admission,
+cancellation checks, and bounded writing. No HTTP endpoint latency is measured.
+
+When updating Ferret, run `TestFormatPreservesLiteralValues`. It compares the
+compiled constants before and after formatting and formats the output again to
+check idempotence. The HTTP tests exercise formatting through the public router
+and check that the advertised output limit is enforced.

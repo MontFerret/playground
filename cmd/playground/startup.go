@@ -16,6 +16,9 @@ import (
 
 type serviceHost interface {
 	Environment(context.Context) (playground.Runtime, error)
+	Analyze(context.Context, playground.Source) (playground.AnalysisResult, error)
+	Format(context.Context, playground.Source, playground.FormatOptions) (playground.FormatResult, error)
+	Compile(context.Context, playground.Source, playground.CompileOptions) (playground.CompileResult, error)
 	Close(context.Context) error
 }
 

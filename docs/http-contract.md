@@ -1,101 +1,159 @@
 # HTTP behavior and first-release contract
 
-[OpenAPI](../api/openapi.yaml) is the versioned contract. `/api/v1` and the
-document's `info.version` describe that contract, separately from service and
-runtime versions. Only environment discovery is implemented. Planned operations
-are marked in the specification; their documented 200 responses are future
-models, not current promises that the routes are callable.
+[OpenAPI](../api/openapi.yaml) owns `/api/v1`. REST, service, and runtime versions
+are separate. The service exposes environment discovery, analysis, formatting,
+and compilation. Execution is planned.
 
-## Implemented behavior
+## Routing and application errors
 
-`GET /api/v1/environment` describes the initialized native host, working service
-capabilities, and effective HTTP settings. All other paths receive JSON `404`.
-Unsupported methods on the exact environment path receive JSON `405` with
-`Allow: GET`. This includes OPTIONS and HEAD; HEAD suppresses the response body.
-There are no automatic redirects for trailing slashes and no CORS policy yet.
+`GET /api/v1/environment` describes the initialized host, working capabilities,
+and effective limits. `/api/v1/analyze`, `/api/v1/format`, and `/api/v1/compile` accept POST. Other
+methods on these exact paths receive `405/method_not_allowed` and `Allow`.
+Unavailable and unknown paths receive `404/not_found`. HEAD suppresses response
+bodies. There are no trailing-slash redirects or CORS policy.
 
-Application responses use `application/json`. Errors contain only
-`error.code` and `error.message`; they omit source, parameters, stack traces,
-configuration, and dependency error details. Internal failures and recovered
-handler panics receive `500` with `internal_error`. Operational logs likewise
-omit payloads, panic values, and raw dependency errors from request handling.
+Application responses use `application/json` and `X-Content-Type-Options: nosniff`.
+Errors contain only `error.code` and `error.message`. No raw dependency error,
+source body, parameter values, configuration, panic value, or stack is included
+in application error envelopes or operational logs. Structured source diagnostics
+are returned only in invalid-program responses, with upstream messages and hints.
 
-Malformed HTTP, oversized headers (including `431`), disconnects, and connection
-deadlines can be handled by Go's HTTP server before or outside the application
-handler. They may have standard-library text responses or no response at all;
-the JSON envelope applies to application-generated responses. Raw net/http log
-events are reduced to a generic event so an unexpected transport panic does not
-dump its text or stack into operational logs.
+| HTTP | Error code | Meaning |
+|---|---|---|
+| 400 | `invalid_request` | Malformed or schema-invalid JSON/options |
+| 408 | `request_canceled`, `request_timeout` | Canceled context or expired deadline |
+| 413 | `request_too_large` | Request-body or source byte limit exceeded |
+| 415 | `unsupported_media_type` | Unsupported Content-Type or parameters |
+| 422 | `response_too_large` | Formatted source, disassembly, or encoded response exceeded its byte limit |
+| 500 | `internal_error` | Unexpected native error, panic, artifact, or cleanup failure |
+| 503 | `service_unavailable` | Runtime closure prevents admission |
 
-## Planned request decoding
+Cancellation responses are possible only while the transport remains writable.
+Malformed HTTP, oversized headers, disconnects, and connection deadlines can be
+handled by net/http outside the application and may yield text or no response.
+Raw net/http logs are reduced to generic events. The reserved `429/rate_limited`
+contract does not imply an installed rate limiter.
 
-All four POST operations currently return `404`, regardless of body or media
-type. Their future handlers must:
+## Strict requests and bounds
 
-- Enforce a finite configured byte limit while reading, including chunked
-  requests. Reject oversized bodies with `413`/`request_too_large`.
-- Accept `application/json`, optionally with `charset=utf-8`; reject other media
-  types or charsets with `415`/`unsupported_media_type`.
-- Require exactly one non-null JSON object. Reject malformed JSON, trailing
-  documents, missing required fields, unknown fields, and unsupported options
-  with `400`/`invalid_request`.
-- Apply unknown-field rejection to service request objects, including source and
-  options. Bind-parameter keys are intentionally open JSON object members.
-- Keep public request data separate from host configuration: no filesystem
-  roots, network clients, module loading, or arbitrary operator options.
+Accept `application/json`, optionally with `charset=utf-8` (case-insensitive
+charset), and no other media-type parameters. Require exactly one non-null JSON
+object. Reject trailing documents, unknown or duplicate object fields, incorrect
+field casing, and null values for non-nullable fields. These rules also apply to
+nested source and options objects.
 
-Source has required `text` and optional display-label `name`. Omitted names use
-`anonymous`. Empty text is a source-validation outcome, not a missing field.
-Bind parameters are JSON objects and must use Ferret's parameter conversion.
-Compilation accepts `none`, `basic`, or `full` optimization (default `full`);
-UAPI's `aggressive` level is unsupported by this Ferret dependency. Compile
-inspection reserves `parameters` and native `bytecode` JSON only. Returned
-artifacts contain only requested entries; no signatures, AST, IR, or assembly
-are fabricated. Bytecode fields belong to the reported Ferret version.
+Source requires string `text` and optionally string `name`. Omitted name becomes
+`anonymous`; names, including path-shaped labels, are never opened as files.
+Missing/null text is invalid request data. Empty text is passed to Ferret, which
+returns an invalid-program outcome. Analysis and formatting accept only
+`source`. Compilation also accepts `options` and `include`.
 
-No POST body limit or execution/output budget is currently advertised. Later
-handlers must implement their finite bounds before adding them to environment
-metadata. `429`/`rate_limited` is reserved for future admission controls, with
-`Retry-After` when known; no limiter exists now. `503`/`service_unavailable` is
-reserved for future temporary service failures.
+Defaults and their environment overrides are in the [README](../README.md#configuration):
 
-## Program outcomes and locations
+| Effective setting | Default | Enforcement |
+|---|---:|---|
+| `limits.http.maxRequestBodyBytes` | 1 MiB | Bounded reading, including unknown-length/chunked bodies |
+| `limits.tooling.maxSourceBytes` | 64 KiB | UTF-8 text bytes before native work |
+| `limits.tooling.maxBytecodeBytes` | 1 MiB | Disassembly string bytes after upstream generation |
+| `limits.tooling.maxFormattedSourceBytes` | 1 MiB | UTF-8 bytes accepted by the formatter's output writer |
+| `limits.http.maxResponseBytes` | 2 MiB | Complete JSON bytes, including final newline, before response headers |
 
-Analysis, formatting, and compilation return `ok` or `invalid` operation models
-with diagnostics. Execution additionally supports `failed` for submitted-program
-or operation-budget failures. These are 200 program outcomes, not transport
-errors. Internal engine/service defects must instead produce sanitized HTTP
-service errors, not be mislabeled as failures in submitted FQL.
+No output is silently truncated. Disassembly and JSON encoding materialize their
+complete results before the respective checks. Source limits do not guarantee
+bounds on compiler or disassembler allocations, and output settings are response
+limits rather than allocation limits. The minimum configurable response limit is
+256 bytes so fixed sanitized error envelopes always fit. A very small response
+limit can also reject environment metadata.
 
-Diagnostics have severity, phase, message, optional stable code, optional
-location, and optional hint. Native kinds do not necessarily provide stable
-codes, severity, or operation phase directly. Adapters must map documented
-engine information and operation context, never derive codes from message text
-or return raw native diagnostic objects containing source or internal causes.
+## Analysis and compilation
 
-HTTP locations use zero-based lines and UTF-16 code units within each line.
-Ranges have exclusive ends and can be zero-width at EOF. Native source positions
-use one-based lines and UTF-8 byte columns, with zero-based byte spans. UAPI
-deliberately leaves offset units to producers. A future adapter must use the
-submitted text to convert both ends, including CRLF and supplementary Unicode
-characters. These conversion functions are not needed by environment discovery
-and are not implemented prematurely.
+Both operations use the initialized native engine's compilation path and never
+create sessions or execute FQL. Analysis uses full optimization. It checks
+parsing, lexical bindings, and the semantic checks provided by native compilation.
+Host-function resolution and parameter binding remain runtime concerns in
+alpha.60. Unknown host functions and unbound parameters can compile successfully.
+The playground supplies no additional resolver and makes no runtime-success claim.
 
-## Buffered execution output
+Compilation maps `none`, `basic`, and `full` explicitly to native per-plan
+options; default is `full`. `aggressive` is unsupported. The same supported values
+and default are reported in environment metadata.
 
-A successful response requires `output`, which may be JSON `null`. A failed or
-invalid response omits `output` entirely. The schemas reject both a successful
-response without output and a failed response with `output: null`.
+`include` accepts `bytecode` and `parameters`, with duplicate names rejected.
+Omitted or empty inclusion returns an empty artifacts object. Parameter metadata
+comes from `Plan.Params()`: referenced names are unique and ordered by native
+first encounter, including references inside UDF bodies. Requested empty metadata
+is `[]`; no values, types, defaults, or requiredness are inferred.
 
-Future execution must consume and finalize Ferret's one-shot output, enforce
-finite byte limits during consumption, and close abandoned output, sessions,
-and plans in ownership order. Buffer the complete JSON response before sending
-headers; never expose partial engine output as successful JSON. Preserve native
-JSON bytes rather than decode/re-encode through host floating-point values.
-There is no HTTP streaming framing in v1's initial response contract.
+Bytecode is upstream disassembly in `{format: "text", text: "..."}`. It is display
+text specific to the reported runtime version. The plan exposes no program
+accessor, so requested disassembly uses `Plan.Marshal`, `artifact.Unmarshal`, and
+`asm.Disassemble`. No private access, instruction decoder, or second compilation
+is used. Serialization and disassembly are skipped when bytecode is not requested.
 
-Timings are monotonic elapsed milliseconds: total time is present, and compile
-and execute times appear only for reached phases. Native execution also encodes
-output, so execute time includes encoding/consumption; no separate encoding
-timer is invented. Native synchronous phases cannot promise hard preemption
-merely because their caller has a context deadline.
+Success returns `status: "ok"` and `diagnostics: []`; source rejection returns
+HTTP 200 with `status: "invalid"` and structured diagnostics. Compilation success
+includes artifacts and timings; invalid compilation includes timings but no
+artifacts. Analysis includes neither. `compileMs` is monotonic elapsed time around
+`Engine.Compile`, including native compile hooks and excluding source creation,
+artifact rendering, plan closure, and HTTP encoding. The older planned `outcome`,
+`inspect`, and bytecode JSON models are replaced for tooling. Planned execution
+still uses its distinct `outcome` contract.
+
+## Formatting
+
+`POST /api/v1/format` uses Ferret's default formatter without compilation or
+host-function resolution. HTTP 200 with `status: "ok"` includes empty diagnostics
+and the complete native output in `formattedSource`. A syntax error returns HTTP
+200 with `status: "invalid"` and diagnostics referring to the submitted source.
+That response omits `formattedSource`.
+
+The output writer enforces `PLAYGROUND_MAX_FORMATTED_SOURCE_BYTES` on each write
+and discards partial output on failure. Exceeding the limit returns 422. The
+complete JSON response also has a separate limit checked after encoding.
+The writer observes cancellation between writes. Parsing and native formatting
+between writes are synchronous, and the byte limit applies only to emitted text.
+
+## Diagnostic coordinates and failures
+
+Native structured diagnostic kinds determine source rejection versus internal
+failure. Syntax errors use phase `parse`; semantic/name/type/unsupported-source
+errors use `compile` consistently across tooling adapters. Alpha.60 exposes errors, without a warning
+severity channel or stable diagnostic codes. The adapter invents neither.
+Messages and hints are copied without parsing rendered terminal errors. Ordering
+follows the upstream error tree; the main span is preferred, otherwise the first
+span. Internal diagnostics, unknown error kinds, and mixed source/internal errors
+produce sanitized service errors. Cleanup failures take precedence over success,
+source rejection, or simultaneous cancellation.
+
+HTTP positions use zero-based lines and UTF-16 units within a line. Native compiler and formatter
+spans are zero-based UTF-8 byte offsets with exclusive ends. Conversion uses the
+submitted text; supplementary characters occupy two UTF-16 units and CRLF is one
+line break. EOF can be a zero-width range, including on an empty last line. Native
+recovery can place an insertion before trailing whitespace; that position is
+preserved. Missing, reversed, out-of-range, or non-character-boundary spans omit
+the range rather than fabricating precision. Source identity remains present.
+
+## Cancellation and ownership
+
+The request context reaches native compilation. Cancellation is checked before
+work, between supported native phases and artifact stages, and after cleanup.
+The compiler phases, serialization, disassembly, and native close are synchronous;
+no hard preemption guarantee is made. HTTP write deadlines are connection settings,
+not a compiler execution budget. Compilation is never detached into a background
+goroutine to simulate cancellation.
+
+The host owns its engine and formatter. Each compilation owns its temporary plan. Plans close
+before detached results return, including on artifact-limit or cancellation
+failure. Host closure rejects new tooling admission and waits for active operations
+and plan cleanup before engine closure. A fresh cleanup context bounds the caller's
+wait; expiration does not abandon ownership ordering or forcibly terminate native
+work. No cache, retained plan identifier, or session registry is introduced.
+
+## Planned buffered execution output
+
+Execution remains unavailable. Its future success model requires output, including
+JSON null; failure omits output. A future implementation must consume and finalize
+one-shot Ferret output, enforce limits during consumption, and close sessions and
+plans in ownership order. Preserve native JSON bytes and buffer complete successful
+responses. No HTTP streaming framing is defined here. Planned execution timings
+include total time and reached phases; execution includes output consumption.

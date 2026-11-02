@@ -16,7 +16,7 @@ import (
 func TestInitializedEnvironment(t *testing.T) {
 	var registered atomic.Bool
 	version := "module-1"
-	info := &debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/MontFerret/ferret/v2", Version: "v2.0.0-alpha.58"}}}
+	info := &debug.BuildInfo{Deps: []*debug.Module{{Path: "github.com/MontFerret/ferret/v2", Version: "v2.0.0-alpha.60"}}}
 	host, err := newHost([]registration{{module: testModule{name: "observer", register: func(boot module.Bootstrap) error {
 		functions, err := boot.Host().Library().Build()
 		if err != nil {
@@ -46,7 +46,7 @@ func TestInitializedEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !registered.Load() || description.Name != "ferret" || description.StandardLibrary != "safe" || description.Version == nil || *description.Version != api.Version("v2.0.0-alpha.58") || len(description.Modules) != 1 || description.Modules[0].Name != "observer" || *description.Modules[0].Version != "module-1" {
+	if !registered.Load() || description.Name != "ferret" || description.StandardLibrary != "safe" || description.Version == nil || *description.Version != api.Version("v2.0.0-alpha.60") || len(description.Modules) != 1 || description.Modules[0].Name != "observer" || *description.Modules[0].Version != "module-1" {
 		t.Fatalf("incorrect initialized metadata: %+v", description)
 	}
 
@@ -57,7 +57,7 @@ func TestInitializedEnvironment(t *testing.T) {
 	for range 32 {
 		wg.Go(func() {
 			copy, err := host.Environment(context.Background())
-			if err != nil || *copy.Version != "v2.0.0-alpha.58" || copy.Modules[0].Name != "observer" || *copy.Modules[0].Version != "module-1" {
+			if err != nil || *copy.Version != "v2.0.0-alpha.60" || copy.Modules[0].Name != "observer" || *copy.Modules[0].Version != "module-1" {
 				t.Errorf("snapshot changed: %+v, %v", copy, err)
 			}
 

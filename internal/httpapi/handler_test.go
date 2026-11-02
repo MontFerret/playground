@@ -55,8 +55,8 @@ func TestEnvironmentAndConcurrentRequests(t *testing.T) {
 				return
 			}
 
-			want := playground.Capabilities{Environment: true, OptimizationLevels: []string{}, InspectionArtifacts: []string{}}
-			if response.StatusCode != 200 || response.Header.Get("Content-Type") != "application/json" || body.APIVersion != "v1" || body.Runtime.Name != "ferret" || body.Runtime.StandardLibrary != "safe" || body.Runtime.Modules == nil || len(body.Runtime.Modules) != 0 || !reflect.DeepEqual(body.Capabilities, want) || body.Service.Version == nil || *body.Service.Version != "service-test" || body.Limits.HTTP != httpLimits(cfg) {
+			want := playground.Capabilities{Environment: true, Analyze: true, Format: true, Compile: true, OptimizationLevels: playground.OptimizationLevels(), DefaultOptimization: playground.DefaultOptimization, InspectionArtifacts: playground.InspectionArtifacts()}
+			if response.StatusCode != 200 || response.Header.Get("Content-Type") != "application/json" || body.APIVersion != "v1" || body.Runtime.Name != "ferret" || body.Runtime.StandardLibrary != "safe" || body.Runtime.Modules == nil || len(body.Runtime.Modules) != 0 || !reflect.DeepEqual(body.Capabilities, want) || body.Service.Version == nil || *body.Service.Version != "service-test" || body.Limits.HTTP != httpLimits(cfg) || body.Limits.Tooling.MaxSourceBytes != cfg.MaxSourceBytes || body.Limits.Tooling.MaxBytecodeBytes != cfg.MaxBytecodeBytes || body.Limits.Tooling.MaxFormattedSourceBytes != cfg.MaxFormattedSourceBytes {
 				t.Errorf("incorrect environment response: status=%d body=%+v", response.StatusCode, body)
 			}
 		})
@@ -79,9 +79,10 @@ func TestRoutesAndPublicErrors(t *testing.T) {
 		{"GET", "/", "not_found", 404},
 		{"GET", "/api/v1/environment/", "not_found", 404},
 		{"GET", "/api/v2/environment", "not_found", 404},
-		{"POST", "/api/v1/analyze", "not_found", 404},
-		{"POST", "/api/v1/format", "not_found", 404},
-		{"POST", "/api/v1/compile", "not_found", 404},
+		{"GET", "/api/v1/analyze", "method_not_allowed", 405},
+		{"GET", "/api/v1/format", "method_not_allowed", 405},
+		{"POST", "/api/v1/format/", "not_found", 404},
+		{"HEAD", "/api/v1/compile", "method_not_allowed", 405},
 		{"POST", "/api/v1/execute", "not_found", 404},
 		{"POST", "/api/v1/environment", "method_not_allowed", 405},
 		{"OPTIONS", "/api/v1/environment", "method_not_allowed", 405},
@@ -95,7 +96,12 @@ func TestRoutesAndPublicErrors(t *testing.T) {
 				t.Fatalf("status/headers = %d, %v", response.Code, response.Header())
 			}
 
-			if test.status == 405 && response.Header().Get("Allow") != "GET" {
+			allowed := "GET"
+			if test.path != "/api/v1/environment" {
+				allowed = "POST"
+			}
+
+			if test.status == 405 && response.Header().Get("Allow") != allowed {
 				t.Fatal("missing Allow header")
 			}
 
