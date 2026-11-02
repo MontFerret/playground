@@ -9,11 +9,12 @@ import (
 
 type (
 	httpDiagnostic struct {
-		Severity string             `json:"severity"`
-		Phase    string             `json:"phase"`
-		Message  string             `json:"message"`
-		Hint     string             `json:"hint,omitempty"`
-		Location diagnosticLocation `json:"location"`
+		Code     string              `json:"code,omitempty"`
+		Severity string              `json:"severity"`
+		Phase    string              `json:"phase"`
+		Message  string              `json:"message"`
+		Hint     string              `json:"hint,omitempty"`
+		Location *diagnosticLocation `json:"location,omitempty"`
 	}
 
 	diagnosticLocation struct {
@@ -71,7 +72,7 @@ func (s *sourceIndex) diagnostics(values []playground.Diagnostic) []httpDiagnost
 	for _, value := range values {
 		converted := httpDiagnostic{
 			Severity: "error", Phase: value.Phase, Message: value.Message, Hint: value.Hint,
-			Location: diagnosticLocation{Source: value.Source},
+			Location: &diagnosticLocation{Source: value.Source},
 		}
 		if value.Span != nil && value.Span.End >= value.Span.Start {
 			start, startOK := s.position(value.Span.Start)

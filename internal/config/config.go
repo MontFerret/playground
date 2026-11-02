@@ -25,6 +25,8 @@ type Config struct {
 	MaxSourceBytes          int
 	MaxBytecodeBytes        int
 	MaxFormattedSourceBytes int
+	MaxExecutionTimeout     time.Duration
+	MaxOutputBytes          int
 	MaxResponseBytes        int
 }
 
@@ -44,6 +46,8 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		MaxSourceBytes:          64 << 10,
 		MaxBytecodeBytes:        1 << 20,
 		MaxFormattedSourceBytes: 1 << 20,
+		MaxExecutionTimeout:     5 * time.Second,
+		MaxOutputBytes:          1 << 20,
 		MaxResponseBytes:        2 << 20,
 	}
 
@@ -74,6 +78,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		target *time.Duration
 	}{
 		{"PLAYGROUND_READ_HEADER_TIMEOUT", &cfg.ReadHeaderTimeout},
+		{"PLAYGROUND_MAX_EXECUTION_TIMEOUT", &cfg.MaxExecutionTimeout},
 		{"PLAYGROUND_READ_TIMEOUT", &cfg.ReadTimeout},
 		{"PLAYGROUND_WRITE_TIMEOUT", &cfg.WriteTimeout},
 		{"PLAYGROUND_IDLE_TIMEOUT", &cfg.IdleTimeout},
@@ -108,6 +113,7 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		minimum int
 	}{
 		{"PLAYGROUND_MAX_REQUEST_BODY_BYTES", &cfg.MaxRequestBodyBytes, 1},
+		{"PLAYGROUND_MAX_OUTPUT_BYTES", &cfg.MaxOutputBytes, 1},
 		{"PLAYGROUND_MAX_SOURCE_BYTES", &cfg.MaxSourceBytes, 1},
 		{"PLAYGROUND_MAX_BYTECODE_BYTES", &cfg.MaxBytecodeBytes, 1},
 		{"PLAYGROUND_MAX_FORMATTED_SOURCE_BYTES", &cfg.MaxFormattedSourceBytes, 1},

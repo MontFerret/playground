@@ -37,12 +37,7 @@ func TestOpenAPIDocumentAndExamples(t *testing.T) {
 
 	for path, item := range doc.Paths.Map() {
 		for method, operation := range item.Operations() {
-			want := "planned"
-			if path == "/api/v1/environment" || path == "/api/v1/analyze" || path == "/api/v1/format" || path == "/api/v1/compile" {
-				want = "implemented"
-			}
-
-			if operation.Extensions["x-implementation-status"] != want {
+			if operation.Extensions["x-implementation-status"] != "implemented" {
 				t.Errorf("%s %s has wrong implementation status", method, path)
 			}
 
@@ -84,7 +79,12 @@ func TestOpenAPIImplementedResponses(t *testing.T) {
 	}{
 		{"GET", "/api/v1/environment", "", 200, false},
 		{"GET", "/unknown", "", 404, false},
-		{"POST", "/api/v1/execute", "", 404, false},
+		{"POST", "/api/v1/execute", "", 415, false},
+		{"POST", "/api/v1/execute", `{"source":{"text":"RETURN @order.id"},"params":{"order":{"id":"A1"}}}`, 200, false},
+		{"POST", "/api/v1/execute", `{"source":{"text":"RETURN null"}}`, 200, false},
+		{"POST", "/api/v1/execute", `{"source":{"text":"RETURN missing"}}`, 200, false},
+		{"POST", "/api/v1/execute", `{"source":{"text":"RETURN UNKNOWN_FUNCTION()"}}`, 200, false},
+		{"POST", "/api/v1/execute", `{"source":{"text":"RETURN 1"},"options":{"timeoutMs":0}}`, 400, false},
 		{"POST", "/api/v1/environment", "", 405, false},
 		{"GET", "/api/v1/environment", "", 408, true},
 		{"POST", "/api/v1/format", `{"source":{"text":"RETURN 1"}}`, 200, false},
@@ -156,11 +156,13 @@ func TestOpenAPIOutputPresenceAndRequestOptions(t *testing.T) {
 		schema, document string
 		valid            bool
 	}{
-		{"ExecutionResponse", `{"outcome":"ok","diagnostics":[],"output":null,"timings":{"totalMs":0}}`, true},
-		{"ExecutionResponse", `{"outcome":"ok","diagnostics":[],"output":{"nested":[null,1,true,"text"]},"timings":{"totalMs":0}}`, true},
-		{"ExecutionResponse", `{"outcome":"ok","diagnostics":[],"timings":{"totalMs":0}}`, false},
-		{"ExecutionResponse", `{"outcome":"failed","diagnostics":[],"timings":{"totalMs":0}}`, true},
-		{"ExecutionResponse", `{"outcome":"failed","diagnostics":[],"output":null,"timings":{"totalMs":0}}`, false},
+		{"ExecutionResponse", `{"status":"ok","diagnostics":[],"output":null,"timings":{"totalMs":0}}`, true},
+		{"ExecutionResponse", `{"status":"ok","diagnostics":[],"output":{"nested":[null,1,true,"text"]},"timings":{"totalMs":0}}`, true},
+		{"ExecutionResponse", `{"status":"ok","diagnostics":[],"timings":{"totalMs":0}}`, true},
+		{"ExecutionResponse", `{"status":"failed","diagnostics":[],"timings":{"totalMs":0}}`, false},
+		{"ExecutionResponse", `{"status":"failed","diagnostics":[{"phase":"execute","severity":"error","message":"Failed"}],"timings":{"totalMs":0}}`, false},
+		{"ExecutionResponse", `{"status":"failed","diagnostics":[{"phase":"execute","severity":"error","code":"runtime_error","message":"Failed"}],"timings":{"totalMs":0}}`, true},
+		{"ExecutionResponse", `{"status":"failed","diagnostics":[{"phase":"execute","severity":"error","code":"runtime_error","message":"Failed"}],"output":null,"timings":{"totalMs":0}}`, false},
 		{"CompileRequest", `{"source":{"text":"RETURN 1"},"options":{"optimization":"full"},"include":["parameters","bytecode"]}`, true},
 		{"CompileRequest", `{"source":{"text":"RETURN 1"},"options":{"optimization":"aggressive"}}`, false},
 		{"CompileRequest", `{"source":{"text":"RETURN 1"},"include":["ast"]}`, false},
@@ -233,6 +235,8 @@ func TestOpenAPILimitResponses(t *testing.T) {
 		body            string
 		status          int
 	}{
+		{"output", "execute", func(c *config.Config) { c.MaxOutputBytes = 1 }, `{"source":{"text":"RETURN 12"}}`, 200},
+		{"timeout", "execute", func(c *config.Config) { c.MaxExecutionTimeout = 1 }, `{"source":{"text":"RETURN 12"}}`, 200},
 		{"body", "compile", func(c *config.Config) { c.MaxRequestBodyBytes = 1 }, `{"source":{"text":"RETURN 1"}}`, 413},
 		{"source", "compile", func(c *config.Config) { c.MaxSourceBytes = 1 }, `{"source":{"text":"RETURN 1"}}`, 413},
 		{"formatted source", "format", func(c *config.Config) { c.MaxFormattedSourceBytes = 7 }, `{"source":{"text":"RETURN 1"}}`, 422},

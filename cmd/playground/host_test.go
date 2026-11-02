@@ -29,3 +29,7 @@ func (h testHost) Compile(context.Context, playground.Source, playground.Compile
 func (h testHost) Format(context.Context, playground.Source, playground.FormatOptions) (playground.FormatResult, error) {
 	return playground.FormatResult{}, nil
 }
+
+func (h testHost) Execute(context.Context, playground.Source, playground.ExecuteOptions) (playground.ExecuteResult, error) {
+	return playground.ExecuteResult{}, nil
+}

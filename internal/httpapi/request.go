@@ -12,58 +12,95 @@ import (
 
 var errInvalidRequest = errors.New("invalid request")
 
-func decodeToolingRequest(data []byte, compile bool) (playground.Source, playground.CompileOptions, error) {
-	src := playground.Source{Name: "anonymous"}
-	options := playground.CompileOptions{Optimization: playground.DefaultOptimization}
+type postRequest struct {
+	source       playground.Source
+	optimization playground.Optimization
+	include      []playground.InspectionArtifact
+	params       map[string]json.RawMessage
+	timeoutMs    int64
+}
+
+func decodeRequest(data []byte, path string) (postRequest, error) {
+	req := postRequest{source: playground.Source{Name: "anonymous"}, optimization: playground.DefaultOptimization}
 	fields := []string{"source"}
-	if compile {
+	optionFields := []string{"optimization"}
+	switch path {
+	case "/api/v1/compile":
 		fields = append(fields, "options", "include")
+	case "/api/v1/execute":
+		fields = append(fields, "options", "params")
+		optionFields = append(optionFields, "timeoutMs")
 	}
 
 	request, err := decodeObject(data, fields...)
 	if err != nil {
-		return src, options, err
+		return req, err
 	}
 
 	source, err := decodeObject(request["source"], "name", "text")
 	if err != nil {
-		return src, options, err
+		return req, err
 	}
 
-	if err := decodeNonNull(source["text"], &src.Text); err != nil {
-		return src, options, err
+	if err := decodeNonNull(source["text"], &req.source.Text); err != nil {
+		return req, err
 	}
 
 	if name, ok := source["name"]; ok {
-		if err := decodeNonNull(name, &src.Name); err != nil {
-			return src, options, err
+		if err := decodeNonNull(name, &req.source.Name); err != nil {
+			return req, err
 		}
 	}
 
 	if raw, ok := request["options"]; ok {
-		values, err := decodeObject(raw, "optimization")
+		values, err := decodeObject(raw, optionFields...)
 		if err != nil {
-			return src, options, err
+			return req, err
 		}
 
 		if value, ok := values["optimization"]; ok {
-			if err := decodeNonNull(value, &options.Optimization); err != nil {
-				return src, options, err
+			if err := decodeNonNull(value, &req.optimization); err != nil {
+				return req, err
+			}
+		}
+
+		if value, ok := values["timeoutMs"]; ok {
+			if err := decodeNonNull(value, &req.timeoutMs); err != nil || req.timeoutMs <= 0 {
+				return req, errInvalidRequest
+			}
+		}
+	}
+
+	if raw, ok := request["params"]; ok {
+		req.params, err = decodeObject(raw)
+		if err != nil {
+			return req, err
+		}
+
+		for _, value := range req.params {
+			if value[0] != '{' && value[0] != '[' {
+				continue
+			}
+
+			decoder := json.NewDecoder(bytes.NewReader(value))
+			decoder.UseNumber()
+			if err := checkParameterKeys(decoder); err != nil {
+				return req, err
 			}
 		}
 	}
 
 	if raw, ok := request["include"]; ok {
-		if err := decodeNonNull(raw, &options.Include); err != nil {
-			return src, options, err
+		if err := decodeNonNull(raw, &req.include); err != nil {
+			return req, err
 		}
 	}
 
-	if !playground.ValidOptimization(options.Optimization) || !playground.ValidArtifacts(options.Include) {
-		return src, options, errInvalidRequest
+	if !playground.ValidOptimization(req.optimization) || !playground.ValidArtifacts(req.include) {
+		return req, errInvalidRequest
 	}
 
-	return src, options, nil
+	return req, nil
 }
 
 // JSON syntax stays owned by encoding/json. Explicit object keys enforce the
@@ -84,7 +121,7 @@ func decodeObject(data []byte, fields ...string) (map[string]json.RawMessage, er
 		}
 
 		key, ok := token.(string)
-		if !ok || !slices.Contains(fields, key) {
+		if !ok || (fields != nil && !slices.Contains(fields, key)) {
 			return nil, errInvalidRequest
 		}
 
@@ -117,4 +154,47 @@ func decodeNonNull(data []byte, target any) error {
 	}
 
 	return json.Unmarshal(data, target)
+}
+
+// Parameter objects have arbitrary keys, but follow the same uniqueness rule
+// at every depth. Keep original value bytes for Ferret's numeric conversion.
+func checkParameterKeys(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+
+	delim, container := token.(json.Delim)
+	if !container {
+		return nil
+	}
+
+	var keys map[string]struct{}
+	if delim == '{' {
+		keys = make(map[string]struct{})
+	}
+
+	for decoder.More() {
+		if keys != nil {
+			key, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+
+			name := key.(string)
+			if _, exists := keys[name]; exists {
+				return errInvalidRequest
+			}
+
+			keys[name] = struct{}{}
+		}
+
+		if err := checkParameterKeys(decoder); err != nil {
+			return err
+		}
+	}
+
+	_, err = decoder.Token()
+
+	return err
 }

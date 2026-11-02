@@ -59,20 +59,8 @@ func (h *Host) compile(ctx context.Context, src playground.Source, options playg
 	}
 	defer h.active.Done()
 
-	var level engine.OptimizationLevel
-	switch options.Optimization {
-	case playground.OptimizationNone:
-		level = engine.OptimizationNone
-	case playground.OptimizationBasic:
-		level = engine.OptimizationBasic
-	case playground.OptimizationFull:
-		level = engine.OptimizationFull
-	}
-
-	nativeSource := source.New(src.Name, src.Text)
-	started := time.Now()
-	plan, err := h.engine.Compile(ctx, nativeSource, engine.WithPlanOptimizationLevel(level))
-	result.CompileDuration = time.Since(started)
+	plan, duration, err := h.compilePlan(ctx, src, options.Optimization)
+	result.CompileDuration = duration
 	// Register cleanup even for a future native implementation that returns a
 	// non-nil plan alongside an error. Cleanup failures override source outcomes.
 	defer func() {
@@ -151,8 +139,28 @@ func (h *Host) compile(ctx context.Context, src playground.Source, options playg
 	return result, nil
 }
 
+// compilePlan transfers any returned plan to the admitted caller. Only the
+// native compile call contributes to the shared compilation timing.
+func (h *Host) compilePlan(ctx context.Context, src playground.Source, optimization playground.Optimization) (*engine.Plan, time.Duration, error) {
+	var level engine.OptimizationLevel
+	switch optimization {
+	case playground.OptimizationNone:
+		level = engine.OptimizationNone
+	case playground.OptimizationBasic:
+		level = engine.OptimizationBasic
+	case playground.OptimizationFull:
+		level = engine.OptimizationFull
+	}
+
+	nativeSource := source.New(src.Name, src.Text)
+	started := time.Now()
+	plan, err := h.engine.Compile(ctx, nativeSource, engine.WithPlanOptimizationLevel(level))
+
+	return plan, time.Since(started), err
+}
+
 // Admission and closing share a lock so Wait can never race a new Add after
-// closing begins. Active work includes artifact generation and plan cleanup.
+// closing begins. Active work includes output settlement and descendant cleanup.
 func (h *Host) admit() error {
 	h.admission.Lock()
 	defer h.admission.Unlock()

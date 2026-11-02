@@ -7,16 +7,16 @@
 | `cmd/playground` | Signals, configuration loading, composition, listener startup, cleanup sequencing, exit status |
 | `internal/config` | Documented environment/default precedence and validation before resource acquisition |
 | `internal/httpapi` | Exact routing, JSON envelopes, sanitized request logging, HTTP limits and connection lifecycle |
-| `internal/playground` | Transport-independent environment, tooling inputs/results, and byte-span diagnostic models |
-| `internal/runtimehost` | Native engine construction, standard-library selection, optional registration metadata, runtime version, native tooling operations, and resource closure |
+| `internal/playground` | Transport-independent environment, tooling and execution inputs/results, and byte-span diagnostic models |
+| `internal/runtimehost` | Native engine construction, standard-library selection, optional registration metadata, runtime version, native tooling and execution, and resource closure |
 | `api` | Checked-in OpenAPI contract and tests against implemented behavior |
 
 HTTP may depend on environment operations and models; runtime composition must
 not depend on HTTP types, status codes, or environment-variable parsing. Avoid
 frameworks or a generic backend interface. The small provider seam
-contains the environment, analysis, formatting, and compilation operations used
+contains the environment, analysis, formatting, compilation, and execution operations used
 by the handler and controlled failure tests. The executable's host
-seam tests today's cleanup boundary. Neither anticipates execution or debugger APIs.
+seam tests startup and cleanup.
 
 Ferret owns language parsing, diagnostics, compilation, evaluation, and value
 serialization. Analysis and bytecode inspection use native
@@ -48,13 +48,13 @@ after closure.
 The host never executes a query during construction or discovery. Ferret's
 default filesystem is disabled when no root is configured; its default network
 service construction does not issue a request. Safe standard-library selection
-excludes IO functions but is not a security boundary for a future arbitrary
-execution service. No request can configure these host services.
+excludes IO functions. Programs share the service process and its memory budget.
+No request can configure these host services.
 
 Capabilities are owned by working HTTP behavior. Environment discovery, analysis,
-formatting, and compilation are enabled.
+formatting, compilation, and execution are enabled.
 Supported optimization/artifact constants and effective defaults are shared with
-request validation and native mapping. HTTP and tooling limits are reported from
+request validation and native mapping. HTTP, tooling, and execution limits are reported from
 the same validated settings used for enforcement.
 
 ## Tooling operations
@@ -63,7 +63,7 @@ Analysis and compilation share one Engine.Compile path against the initialized
 host. Analysis uses full optimization and renders no artifacts. Compilation uses
 explicit native per-plan options. The compiler does not bind host functions or
 parameter values in alpha.60.
-No operation creates a session or executes a program.
+Analysis and compilation both finish without creating a session.
 
 The temporary plan owns the compiled program. Parameter metadata uses Plan.Params
 in native first-seen order. Requested bytecode uses Plan.Marshal followed by
@@ -94,6 +94,27 @@ The formatter has no closeable resources but its admitted work participates in
 host shutdown. Environment discovery advertises the same output limit passed to
 the formatter on each request.
 
+## Execution and one-shot output
+
+An admitted execution decodes the submitted bind values with Ferret's JSON
+codec, shares the tooling compile path, and creates one session with the
+resulting plan. Session options carry native runtime parameters and select the
+JSON output codec. Modules and host permissions come from service startup.
+
+The invocation context remains live from parameter conversion through
+`Output.Consume`. The callback checks its effective context and remaining byte
+allowance before copying each borrowed chunk. Presence comes from receiving a
+callback. The adapter validates the complete UTF-8 JSON only after terminal
+success. A program outcome may be accompanied by a cleanup error. The caller
+preserves the primary failure and never delivers partial output.
+
+Release the output before closing its session, then close the plan before
+releasing admission. A canceled Consume can leave the handle unclaimed, so the
+owner calls Close even after rejected admission. The shared engine outlives all
+of these descendants. Alpha.60 eagerly materializes the encoded VM result in
+Session.Run. Consumer limits bound delivery bytes, while upstream encoding and
+VM allocations depend on the program.
+
 ## Ownership and shutdown
 
 The executable transfers the host to serving startup, which closes it even if
@@ -107,8 +128,8 @@ HTTP serving ends, close the host under a separate fresh bounded context,
 joining serving and cleanup failures. Defaults permit five seconds for each
 phase. Do not derive cleanup contexts from canceled serving contexts.
 
-Host closure locks admission, rejects new tooling work, and starts a single
-cleanup goroutine. It waits for all admitted operations (including plan cleanup)
+Host closure locks admission, rejects new tooling and execution work, and starts a single
+cleanup goroutine. It waits for all admitted operations (including descendant cleanup)
 before calling engine.Close, then publishes the retained
 result through a closed channel, and permits concurrent or repeated waiters.
 Expiry bounds the caller's wait, not the native operation. No context-aware
@@ -118,7 +139,7 @@ Later in-process callers can still wait for the same cleanup result.
 The admission mutex serializes WaitGroup additions with the closing transition;
 active work always settles before engine closure, even after a cleanup waiter
 times out. Force-closing an HTTP connection alone does not prove native work has
-settled. Future execution must extend ownership ordering to outputs and sessions.
+settled.
 
 ## Upstream integration gaps
 

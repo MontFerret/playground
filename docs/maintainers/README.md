@@ -4,7 +4,7 @@
 - [Engineering principles](engineering/principles.md)
 - [Go code style](engineering/code-style.md)
 - [Testing and validation](engineering/testing.md)
-- [HTTP contract and planned behavior](../http-contract.md)
+- [HTTP contract and operation behavior](../http-contract.md)
 - [Formatter regression history and verified fixes](../upstream-formatter-blockers.md)
 - [Local development](../../README.md)
 

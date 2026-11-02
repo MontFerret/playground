@@ -69,3 +69,10 @@ When updating Ferret, run `TestFormatPreservesLiteralValues`. It compares the
 compiled constants before and after formatting and formats the output again to
 check idempotence. The HTTP tests exercise formatting through the public router
 and check that the advertised output limit is enforced.
+
+The execution consumer benchmark delivers a 64 KiB JSON value in 256-byte
+borrowed chunks. Compare known and unknown lengths with the same byte limit.
+
+```sh
+go test ./internal/runtimehost -run '^$' -bench '^BenchmarkFragmentedOutput$' -benchmem -benchtime=300ms -count=3
+```

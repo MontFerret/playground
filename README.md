@@ -1,6 +1,6 @@
 # Ferret Playground API
 
-A Go REST service for analyzing, formatting, and compiling FQL with Ferret v2.
+A Go REST service for analyzing, formatting, compiling, and executing FQL with Ferret v2.
 Compilation can return disassembled bytecode and referenced parameters. Use the
 environment endpoint to discover the runtime version, capabilities, and limits.
 
@@ -40,7 +40,7 @@ Example response when service build-version metadata is unavailable:
     "analyze": true,
     "format": true,
     "compile": true,
-    "execute": false,
+    "execute": true,
     "debug": false,
     "functionCatalog": false,
     "optimizationLevels": ["none", "basic", "full"],
@@ -57,6 +57,7 @@ Example response when service build-version metadata is unavailable:
       "writeTimeoutMs": 15000,
       "idleTimeoutMs": 60000
     },
+    "execution": {"maxTimeoutMs": 5000, "maxOutputBytes": 1048576},
     "tooling": {"maxSourceBytes": 65536, "maxBytecodeBytes": 1048576, "maxFormattedSourceBytes": 1048576}
   }
 }
@@ -65,8 +66,8 @@ Example response when service build-version metadata is unavailable:
 The service constructs a real native engine with `stdlib.Safe()`, which excludes
 filesystem and network standard-library groups. No optional modules are
 registered. Environment requests read detached metadata; they do not evaluate
-FQL, launch browsers, or make external requests. The profile is not a sandbox
-claim for future execution endpoints.
+FQL, launch browsers, or make external requests. The standard-library profile
+controls function availability. Execution shares the service process.
 
 The runtime version comes from dependency build metadata, honoring versioned
 replacements. Unversioned local replacements and missing development metadata
@@ -95,13 +96,15 @@ configuration flags. Validate all settings before acquiring runtime resources.
 | `PLAYGROUND_MAX_SOURCE_BYTES` | `65536` | Maximum UTF-8 source bytes before native tooling |
 | `PLAYGROUND_MAX_BYTECODE_BYTES` | `1048576` | Maximum returned disassembly text bytes, checked after generation |
 | `PLAYGROUND_MAX_FORMATTED_SOURCE_BYTES` | `1048576` | Maximum UTF-8 bytes of formatted source, enforced on each write |
+| `PLAYGROUND_MAX_EXECUTION_TIMEOUT` | `5s` | Maximum time from native operation entry through result consumption |
+| `PLAYGROUND_MAX_OUTPUT_BYTES` | `1048576` | Maximum encoded execution result bytes retained for delivery |
 | `PLAYGROUND_MAX_RESPONSE_BYTES` | `2097152` | Maximum encoded JSON response bytes including newline, checked after encoding |
 
 Durations use Go syntax and must be positive. Header size must be a positive
 integer within the server's integer range. Addresses require a valid host:port
 and numeric port from 0 to 65535. An empty host, as in `:8080`, binds all
 interfaces and must be an explicit operator choice. Environment discovery
-reports effective HTTP and tooling limits, in fractional milliseconds where needed.
+reports effective HTTP, tooling, and execution limits, in fractional milliseconds where needed.
 Byte limits must be positive representable integers below the platform maximum;
 the response limit must be at least 256 bytes so fixed error envelopes fit.
 `MaxHeaderBytes` has net/http's parsing tolerance, rather than defining an exact
@@ -115,13 +118,13 @@ PLAYGROUND_LISTEN_ADDR=127.0.0.1:9090 PLAYGROUND_SHUTDOWN_TIMEOUT=3s ./bin/playg
 
 Send SIGINT (Ctrl-C) or SIGTERM to the built executable to stop it. HTTP drains
 first; expired drains force-close remaining connections. Host closure then stops
-admission, waits for active tooling operations and their plan cleanup, and closes
+admission, waits for active operations and their output, session, and plan cleanup, and closes
 the native engine. The cleanup wait uses a fresh context after serving
 cancellation. The default combined drain and cleanup wait is at most approximately ten seconds, plus scheduling
 overhead. Cleanup starts once and retains its error. Native compilation phases
 and contextless `Close()` cannot be forcibly interrupted; a cleanup timeout is reported as
 failure and the process may exit while admitted work or native cleanup is still
-running. The engine is never closed ahead of admitted tooling work.
+running. The engine is never closed ahead of admitted work.
 Startup, serving, drain, and cleanup failures produce a nonzero exit status.
 
 ## HTTP surface
@@ -132,10 +135,10 @@ Startup, serving, drain, and cleanup failures produce a nonzero exit status.
 | POST | `/api/v1/analyze` | Implemented: native compilation diagnostics |
 | POST | `/api/v1/format` | Implemented with Ferret's default formatting options |
 | POST | `/api/v1/compile` | Implemented: compilation, parameters, and text bytecode inspection |
-| POST | `/api/v1/execute` | Planned: bounded execution and buffered JSON output |
+| POST | `/api/v1/execute` | Implemented with bounded execution and buffered JSON output |
 
 Unavailable routes return JSON `404`. The environment path supports GET.
-Analysis, formatting, and compilation support POST. Other methods receive `405` with the
+Analysis, formatting, compilation, and execution support POST. Other methods receive `405` with the
 corresponding `Allow` header. HEAD error responses
 contain no body. Application errors share a stable envelope:
 
@@ -209,6 +212,31 @@ values or host-function registration. Invalid FQL returns HTTP 200 with
 Output that exceeds the advertised formatted-source or JSON response limit
 returns `422/response_too_large`. The writer checks cancellation and the text limit
 on every write. Native parsing and work between writes run synchronously.
+
+### Execute with bind parameters
+
+```sh
+curl --silent --show-error http://127.0.0.1:8080/api/v1/execute \
+  -H 'Content-Type: application/json' \
+  --data '{"source":{"text":"RETURN @order.id"},"params":{"order":{"id":"A1"}},"options":{"timeoutMs":500}}'
+```
+
+```json
+{"status":"ok","diagnostics":[],"output":"A1","timings":{"compileMs":0.3,"executeMs":0.2,"totalMs":0.6}}
+```
+
+The service compiles once and runs a fresh session with request-local JSON
+parameters. A successful JSON null appears as `"output":null`. A compile
+rejection returns `invalid` with the same diagnostics as `/compile`. Inspect
+`diagnostics[0].code` on a `failed` response for `runtime_error`,
+`execution_timeout`, or `output_too_large`. All three outcomes use HTTP 200.
+Failed and invalid responses omit `output`.
+
+The earliest request, server, or client deadline applies through output
+consumption. Native compiler phases, host functions that ignore cancellation,
+and synchronous cleanup can delay completion. Ferret alpha.60 materializes
+encoded output during the run. The result limit bounds bytes retained for
+delivery. VM memory and native encoder allocations can exceed that limit.
 
 ## Development and validation
 

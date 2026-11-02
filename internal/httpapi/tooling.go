@@ -57,24 +57,30 @@ func (h *Handler) serveTooling(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	compile := r.URL.Path == "/api/v1/compile"
-	src, options, err := decodeToolingRequest(data, compile)
+	request, err := decodeRequest(data, r.URL.Path)
 	if err != nil {
 		h.writeError(w, r, http.StatusBadRequest, "invalid_request", "The request must match the documented JSON schema.")
 
 		return
 	}
 
+	src := request.source
 	if len(src.Text) > h.toolingLimits.MaxSourceBytes {
 		h.writeError(w, r, http.StatusRequestEntityTooLarge, "request_too_large", "The source exceeds the configured byte limit.")
 
 		return
 	}
 
+	if r.URL.Path == "/api/v1/execute" {
+		h.serveExecution(w, r, request)
+
+		return
+	}
+
 	var diagnostics []playground.Diagnostic
 	response := toolingResponse{Status: "ok"}
-	if compile {
-		options.MaxBytecodeBytes = h.toolingLimits.MaxBytecodeBytes
+	if r.URL.Path == "/api/v1/compile" {
+		options := playground.CompileOptions{Optimization: request.optimization, Include: request.include, MaxBytecodeBytes: h.toolingLimits.MaxBytecodeBytes}
 		result, err := h.provider.Compile(r.Context(), src, options)
 		if err != nil {
 			h.writeOperationError(w, r, err)
@@ -132,6 +138,10 @@ func (h *Handler) writeOperationError(w http.ResponseWriter, r *http.Request, er
 	switch {
 	case errors.Is(err, playground.ErrInternal):
 		// A simultaneous cancellation must not hide a cleanup/internal failure.
+	case errors.Is(err, playground.ErrInvalidParams):
+		h.writeError(w, r, http.StatusBadRequest, "invalid_request", "The bind parameters must be representable JSON values.")
+
+		return
 	case errors.Is(err, playground.ErrClosed):
 		h.writeError(w, r, http.StatusServiceUnavailable, "service_unavailable", "The runtime is closing.")
 

@@ -49,8 +49,9 @@ type (
 
 	// Limits contains only settings enforced by enabled service behavior.
 	Limits struct {
-		HTTP    HTTPLimits    `json:"http"`
-		Tooling ToolingLimits `json:"tooling"`
+		Execution ExecutionLimits `json:"execution"`
+		HTTP      HTTPLimits      `json:"http"`
+		Tooling   ToolingLimits   `json:"tooling"`
 	}
 
 	// HTTPLimits reports net/http settings. Durations use fractional milliseconds

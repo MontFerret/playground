@@ -72,7 +72,7 @@ func (h *Host) Environment(ctx context.Context) (playground.Runtime, error) {
 	return description, nil
 }
 
-// Close stops tooling admission, waits for active operations and plan cleanup,
+// Close stops admission, waits for active operations and descendant cleanup,
 // and then closes the engine once. The context bounds this caller's wait, not
 // native work. Later callers can wait again and observe the retained result.
 func (h *Host) Close(ctx context.Context) error {

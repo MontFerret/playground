@@ -18,6 +18,7 @@ func TestDefaults(t *testing.T) {
 		ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second,
 		IdleTimeout: time.Minute, MaxHeaderBytes: 16384,
 		ShutdownTimeout: 5 * time.Second, CleanupTimeout: 5 * time.Second,
+		MaxExecutionTimeout: 5 * time.Second, MaxOutputBytes: 1 << 20,
 		MaxRequestBodyBytes: 1 << 20, MaxSourceBytes: 64 << 10, MaxBytecodeBytes: 1 << 20, MaxFormattedSourceBytes: 1 << 20, MaxResponseBytes: 2 << 20,
 	}
 	if !reflect.DeepEqual(cfg, want) {
@@ -27,6 +28,7 @@ func TestDefaults(t *testing.T) {
 
 func TestOverridesAndInvalidValues(t *testing.T) {
 	valid := map[string]string{
+		"PLAYGROUND_MAX_EXECUTION_TIMEOUT": "123us", "PLAYGROUND_MAX_OUTPUT_BYTES": "37",
 		"PLAYGROUND_LISTEN_ADDR": "[::1]:0", "PLAYGROUND_MAX_HEADER_BYTES": "8192",
 		"PLAYGROUND_READ_HEADER_TIMEOUT": "1ns", "PLAYGROUND_READ_TIMEOUT": "2s",
 		"PLAYGROUND_WRITE_TIMEOUT": "3s", "PLAYGROUND_IDLE_TIMEOUT": "4s",
@@ -47,7 +49,7 @@ func TestOverridesAndInvalidValues(t *testing.T) {
 		t.Fatalf("overrides not applied: %+v", cfg)
 	}
 
-	if cfg.MaxRequestBodyBytes != 1024 || cfg.MaxSourceBytes != 512 || cfg.MaxBytecodeBytes != 2048 || cfg.MaxFormattedSourceBytes != 3072 || cfg.MaxResponseBytes != 4096 {
+	if cfg.MaxExecutionTimeout != 123*time.Microsecond || cfg.MaxOutputBytes != 37 || cfg.MaxRequestBodyBytes != 1024 || cfg.MaxSourceBytes != 512 || cfg.MaxBytecodeBytes != 2048 || cfg.MaxFormattedSourceBytes != 3072 || cfg.MaxResponseBytes != 4096 {
 		t.Fatalf("tooling limits not applied: %+v", cfg)
 	}
 
@@ -82,6 +84,7 @@ func TestToolingLimitBoundaries(t *testing.T) {
 		name, value string
 		valid       bool
 	}{
+		{"PLAYGROUND_MAX_OUTPUT_BYTES", "1", true},
 		{"PLAYGROUND_MAX_RESPONSE_BYTES", "255", false},
 		{"PLAYGROUND_MAX_RESPONSE_BYTES", "256", true},
 		{"PLAYGROUND_MAX_REQUEST_BODY_BYTES", "1", true},

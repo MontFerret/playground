@@ -19,6 +19,7 @@ type serviceHost interface {
 	Analyze(context.Context, playground.Source) (playground.AnalysisResult, error)
 	Format(context.Context, playground.Source, playground.FormatOptions) (playground.FormatResult, error)
 	Compile(context.Context, playground.Source, playground.CompileOptions) (playground.CompileResult, error)
+	Execute(context.Context, playground.Source, playground.ExecuteOptions) (playground.ExecuteResult, error)
 	Close(context.Context) error
 }
 

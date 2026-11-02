@@ -4,8 +4,7 @@ info:
   version: v1
   description: >-
     REST contract version, independent of service and runtime versions.
-    Environment discovery, analysis, formatting, and compilation are implemented.
-    Execution is planned. Program outcomes use operation models.
+    Environment discovery, analysis, formatting, compilation, and execution are implemented. Program outcomes use operation models.
     Service and HTTP failures use Error. Source names are diagnostic labels,
     never instructions to open host files. Initial execution is buffered JSON,
     not an HTTP streaming protocol.
@@ -14,8 +13,7 @@ servers:
 tags:
   - name: Environment
   - name: Tooling
-  - name: Planned
-    description: Specified first-release behavior; not currently registered.
+  - name: Execution
 paths:
   /api/v1/environment:
     get:
@@ -29,7 +27,7 @@ paths:
         HEAD error responses have no body. Unknown paths receive Error with 404.
       responses:
         '200':
-          description: Initialized runtime, capabilities, and effective HTTP and tooling limits
+          description: Initialized runtime, capabilities, and effective HTTP, tooling, and execution limits
           content:
             application/json:
               schema:
@@ -47,7 +45,7 @@ paths:
                   analyze: true
                   format: true
                   compile: true
-                  execute: false
+                  execute: true
                   debug: false
                   functionCatalog: false
                   optimizationLevels: [none, basic, full]
@@ -62,6 +60,7 @@ paths:
                     readTimeoutMs: 10000
                     writeTimeoutMs: 15000
                     idleTimeoutMs: 60000
+                  execution: {maxTimeoutMs: 5000, maxOutputBytes: 1048576}
                   tooling:
                     maxSourceBytes: 65536
                     maxBytecodeBytes: 1048576
@@ -211,16 +210,16 @@ paths:
   /api/v1/execute:
     post:
       operationId: executeSource
-      tags: [Planned]
-      summary: 'Planned: compilation and bounded execution'
-      x-implementation-status: planned
+      tags: [Execution]
+      summary: Compile once and return the bounded JSON result of one native run
+      x-implementation-status: implemented
       description: >-
-        Not implemented; currently returns 404. Future implementation must enforce
-        finite input, execution, and output limits, consume Ferret's one-shot
-        output with cleanup, and buffer the JSON response before sending it.
-        Only complete successful JSON is output; failures omit output entirely.
-        JSON values retain Ferret serialization semantics, without decoding and
-        re-encoding through floating-point host values.
+        Uses the configured host and a fresh session. The earliest of the request
+        deadline, server maximum, and optional client timeout covers compilation
+        through terminal output consumption. maxOutputBytes bounds retained encoded
+        result bytes. The VM and native encoder may allocate more. Only a complete
+        successful JSON value is delivered. A successful run without content omits
+        output. Present zero-byte or malformed JSON is an internal service error.
       requestBody:
         required: true
         content:
@@ -230,7 +229,7 @@ paths:
             example: {source: {text: 'RETURN @value'}, params: {value: null}}
       responses:
         '200':
-          description: Planned program outcome, including submitted-program failures
+          description: Complete program outcome
           content:
             application/json:
               schema:
@@ -238,17 +237,18 @@ paths:
               examples:
                 successfulNull:
                   value:
-                    outcome: ok
+                    status: ok
                     diagnostics: []
                     output: null
                     timings: {compileMs: 0.3, executeMs: 0.2, totalMs: 0.6}
                 failureWithoutOutput:
                   value:
-                    outcome: failed
+                    status: failed
                     diagnostics:
                       - severity: error
                         phase: execute
-                        message: Execution exceeded the configured limit.
+                        code: execution_timeout
+                        message: The execution deadline expired.
                     timings: {compileMs: 0.3, executeMs: 10, totalMs: 10.4}
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -260,8 +260,10 @@ paths:
           $ref: '#/components/responses/TooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+        '408':
+          $ref: '#/components/responses/RequestCanceled'
+        '422':
+          $ref: '#/components/responses/ResponseTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -283,7 +285,7 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     NotFound:
-      description: Unknown route, including every currently planned POST route
+      description: The requested route does not exist
       content:
         application/json:
           schema:
@@ -382,10 +384,12 @@ components:
         limits:
           type: object
           additionalProperties: false
-          required: [http, tooling]
+          required: [http, tooling, execution]
           properties:
             http:
               $ref: '#/components/schemas/HTTPLimits'
+            execution:
+              $ref: '#/components/schemas/ExecutionLimits'
             tooling:
               $ref: '#/components/schemas/ToolingLimits'
     Module:
@@ -399,7 +403,7 @@ components:
       type: object
       additionalProperties: false
       required: [environment, analyze, format, compile, execute, debug, functionCatalog, optimizationLevels, defaultOptimization, inspectionArtifacts]
-      description: Environment discovery, analysis, formatting, and compilation are available
+      description: Environment discovery, analysis, formatting, compilation, and execution are available
       properties:
         environment: {type: boolean}
         analyze: {type: boolean}
@@ -433,6 +437,13 @@ components:
         readTimeoutMs: {type: number, minimum: 0, exclusiveMinimum: true}
         writeTimeoutMs: {type: number, minimum: 0, exclusiveMinimum: true}
         idleTimeoutMs: {type: number, minimum: 0, exclusiveMinimum: true}
+    ExecutionLimits:
+      type: object
+      additionalProperties: false
+      required: [maxTimeoutMs, maxOutputBytes]
+      properties:
+        maxTimeoutMs: {type: number, minimum: 0, exclusiveMinimum: true, description: "Effective server deadline in milliseconds"}
+        maxOutputBytes: {type: integer, minimum: 1, description: "Maximum encoded result bytes retained for delivery, inclusive"}
     ToolingLimits:
       type: object
       additionalProperties: false
@@ -466,7 +477,7 @@ components:
       type: object
       additionalProperties:
         $ref: '#/components/schemas/JSONValue'
-      description: JSON object passed through Ferret's supported parameter conversion
+      description: JSON bind values decoded by the native JSON codec. Signed 64-bit integer literals retain their precision. Object keys must be unique at every depth.
       example: {value: null, nested: {items: [1, true, text]}}
     JSONValue:
       description: Any JSON value, including null, without imposing a new Ferret value encoding
@@ -517,7 +528,7 @@ components:
         severity: {type: string, enum: [error, warning, info]}
         phase: {type: string, enum: [parse, analyze, format, compile, execute, output]}
         message: {type: string}
-        code: {type: string, description: "Optional stable engine code; do not derive codes from message text"}
+        code: {type: string, description: "Stable category on failed execution, one of runtime_error, execution_timeout, or output_too_large. Omitted for compiler diagnostics."}
         location:
           $ref: '#/components/schemas/Location'
         hint: {type: string}
@@ -568,7 +579,17 @@ components:
         source:
           $ref: '#/components/schemas/Source'
         options:
-          $ref: '#/components/schemas/CompilationOptions'
+          type: object
+          additionalProperties: false
+          properties:
+            optimization:
+              $ref: '#/components/schemas/Optimization'
+            timeoutMs:
+              type: integer
+              format: int64
+              minimum: 1
+              maximum: 9223372036854775807
+              description: Positive integer literal in milliseconds. Larger values within int64 are capped at the server maximum.
         params:
           $ref: '#/components/schemas/BindParameters'
     AnalysisResponse:
@@ -653,8 +674,9 @@ components:
       required: [totalMs]
       description: >-
         Monotonic elapsed milliseconds. Phase values appear only when that phase
-        was reached. executeMs includes native output encoding/consumption;
-        native execution does not expose a separate encoding timer.
+        was reached. compileMs measures the native compile call. executeMs covers
+        session creation through terminal output consumption. totalMs includes
+        operation cleanup and excludes HTTP encoding.
       properties:
         compileMs: {type: number, minimum: 0}
         executeMs: {type: number, minimum: 0}
@@ -662,28 +684,53 @@ components:
     ExecutionResponse:
       oneOf:
         - $ref: '#/components/schemas/ExecutionSuccess'
+        - $ref: '#/components/schemas/ExecutionInvalid'
         - $ref: '#/components/schemas/ExecutionFailure'
     ExecutionSuccess:
       type: object
       additionalProperties: false
-      required: [outcome, diagnostics, output, timings]
+      required: [status, diagnostics, timings]
+      description: Output is present for all encoded values including null. Absent content omits the field.
       properties:
-        outcome: {type: string, enum: [ok]}
+        status: {type: string, enum: [ok]}
         diagnostics:
           $ref: '#/components/schemas/Diagnostics'
         output:
           $ref: '#/components/schemas/JSONValue'
         timings:
           $ref: '#/components/schemas/Timings'
+    ExecutionInvalid:
+      type: object
+      additionalProperties: false
+      required: [status, diagnostics, timings]
+      properties:
+        status: {type: string, enum: [invalid]}
+        diagnostics:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Diagnostic'
+        timings:
+          $ref: '#/components/schemas/Timings'
     ExecutionFailure:
       type: object
       additionalProperties: false
-      required: [outcome, diagnostics, timings]
-      description: invalid denotes source rejection; failed denotes a submitted-program or operation-limit failure; output is absent
+      required: [status, diagnostics, timings]
+      description: A runtime error or execution limit omits output and reports a stable diagnostic category.
       properties:
-        outcome: {type: string, enum: [invalid, failed]}
+        status: {type: string, enum: [failed]}
         diagnostics:
-          $ref: '#/components/schemas/Diagnostics'
+          type: array
+          minItems: 1
+          items:
+            allOf:
+              - $ref: '#/components/schemas/Diagnostic'
+              - type: object
+                required: [code]
+                properties:
+                  code: {type: string, enum: [runtime_error, execution_timeout, output_too_large]}
+                  phase: {type: string, enum: [execute, output]}
+                  severity: {type: string, enum: [error]}
         timings:
           $ref: '#/components/schemas/Timings'
     Error:

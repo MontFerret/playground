@@ -2,12 +2,12 @@
 
 [OpenAPI](../api/openapi.yaml) owns `/api/v1`. REST, service, and runtime versions
 are separate. The service exposes environment discovery, analysis, formatting,
-and compilation. Execution is planned.
+compilation, and execution.
 
 ## Routing and application errors
 
 `GET /api/v1/environment` describes the initialized host, working capabilities,
-and effective limits. `/api/v1/analyze`, `/api/v1/format`, and `/api/v1/compile` accept POST. Other
+and effective limits. `/api/v1/analyze`, `/api/v1/format`, `/api/v1/compile`, and `/api/v1/execute` accept POST. Other
 methods on these exact paths receive `405/method_not_allowed` and `Allow`.
 Unavailable and unknown paths receive `404/not_found`. HEAD suppresses response
 bodies. There are no trailing-slash redirects or CORS policy.
@@ -56,6 +56,8 @@ Defaults and their environment overrides are in the [README](../README.md#config
 | `limits.tooling.maxSourceBytes` | 64 KiB | UTF-8 text bytes before native work |
 | `limits.tooling.maxBytecodeBytes` | 1 MiB | Disassembly string bytes after upstream generation |
 | `limits.tooling.maxFormattedSourceBytes` | 1 MiB | UTF-8 bytes accepted by the formatter's output writer |
+| `limits.execution.maxTimeoutMs` | 5000 ms | Single native operation deadline, shortened by request context and `options.timeoutMs` |
+| `limits.execution.maxOutputBytes` | 1 MiB | Encoded execution result bytes checked before retention |
 | `limits.http.maxResponseBytes` | 2 MiB | Complete JSON bytes, including final newline, before response headers |
 
 No output is silently truncated. Disassembly and JSON encoding materialize their
@@ -95,9 +97,7 @@ HTTP 200 with `status: "invalid"` and structured diagnostics. Compilation succes
 includes artifacts and timings; invalid compilation includes timings but no
 artifacts. Analysis includes neither. `compileMs` is monotonic elapsed time around
 `Engine.Compile`, including native compile hooks and excluding source creation,
-artifact rendering, plan closure, and HTTP encoding. The older planned `outcome`,
-`inspect`, and bytecode JSON models are replaced for tooling. Planned execution
-still uses its distinct `outcome` contract.
+artifact rendering, plan closure, and HTTP encoding.
 
 ## Formatting
 
@@ -122,7 +122,7 @@ severity channel or stable diagnostic codes. The adapter invents neither.
 Messages and hints are copied without parsing rendered terminal errors. Ordering
 follows the upstream error tree; the main span is preferred, otherwise the first
 span. Internal diagnostics, unknown error kinds, and mixed source/internal errors
-produce sanitized service errors. Cleanup failures take precedence over success,
+produce sanitized service errors. For analysis and compilation, cleanup failures take precedence over success,
 source rejection, or simultaneous cancellation.
 
 HTTP positions use zero-based lines and UTF-16 units within a line. Native compiler and formatter
@@ -144,16 +144,44 @@ goroutine to simulate cancellation.
 
 The host owns its engine and formatter. Each compilation owns its temporary plan. Plans close
 before detached results return, including on artifact-limit or cancellation
-failure. Host closure rejects new tooling admission and waits for active operations
-and plan cleanup before engine closure. A fresh cleanup context bounds the caller's
+failure. Host closure rejects new admissions and waits for active operations
+and descendant cleanup before engine closure. A fresh cleanup context bounds the caller's
 wait; expiration does not abandon ownership ordering or forcibly terminate native
 work. No cache, retained plan identifier, or session registry is introduced.
 
-## Planned buffered execution output
+## Buffered execution
 
-Execution remains unavailable. Its future success model requires output, including
-JSON null; failure omits output. A future implementation must consume and finalize
-one-shot Ferret output, enforce limits during consumption, and close sessions and
-plans in ownership order. Preserve native JSON bytes and buffer complete successful
-responses. No HTTP streaming framing is defined here. Planned execution timings
-include total time and reached phases; execution includes output consumption.
+`POST /api/v1/execute` accepts `source`, an optional `params` object, and
+optional `options.optimization` and `options.timeoutMs`. The optimization values
+and default match compilation. Supply timeouts as positive signed 64-bit integer
+literals in milliseconds. Values above the server maximum select that maximum.
+The request context can always shorten the deadline. Request-body validation
+precedes the native execution budget.
+
+Bind values can contain nested arrays, objects, and explicit null. Object keys
+must be unique at every depth. Ferret's native JSON decoder preserves signed
+64-bit integer literals and handles other numeric representations according to
+its codec semantics. A bind value the codec cannot represent receives HTTP 400.
+
+| HTTP 200 status | Response |
+|---|---|
+| `ok` | Empty diagnostics and the complete native JSON value in `output`, including null. Successful absence of content omits the field. |
+| `invalid` | Parse or compile diagnostics identical to `/compile`. Execution did not start. |
+| `failed` | A diagnostic with code `runtime_error`, `execution_timeout`, or `output_too_large`. Output is omitted. |
+
+A failed program never publishes bytes delivered before the terminal error.
+Present zero-byte content, malformed JSON from the encoder, and cleanup-only
+failures produce a sanitized HTTP 500. An earlier program failure retains its
+category when cleanup also fails. The separate HTTP response limit includes the
+envelope and final newline and still returns 422 when exceeded.
+
+Timings use elapsed milliseconds. `compileMs` measures the same native call as
+`/compile`. `executeMs` measures session creation through output settlement,
+including encoding. Omitted phase timings indicate the phase was never reached.
+`totalMs` includes parameter conversion and cleanup and excludes HTTP encoding.
+
+A deadline during an admitted execution produces `failed/execution_timeout`,
+including when it comes from the request context. A disconnected client cancels
+the invocation and may receive no response. Ferret observes cancellation at VM
+safepoints and codec checkpoints. Synchronous compiler phases, host calls, and
+native closure can delay settlement. The service does not retry the run.

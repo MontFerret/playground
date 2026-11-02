@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/MontFerret/playground/internal/config"
 	"github.com/MontFerret/playground/internal/playground"
@@ -14,11 +15,13 @@ import (
 type (
 	// Handler serves only the operations implemented by this service.
 	Handler struct {
-		provider      toolingProvider
-		service       playground.Service
-		limits        playground.HTTPLimits
-		logger        *slog.Logger
-		toolingLimits playground.ToolingLimits
+		provider            toolingProvider
+		service             playground.Service
+		limits              playground.HTTPLimits
+		logger              *slog.Logger
+		toolingLimits       playground.ToolingLimits
+		maxExecutionTimeout time.Duration
+		maxOutputBytes      int
 	}
 
 	toolingProvider interface {
@@ -26,6 +29,7 @@ type (
 		Analyze(context.Context, playground.Source) (playground.AnalysisResult, error)
 		Format(context.Context, playground.Source, playground.FormatOptions) (playground.FormatResult, error)
 		Compile(context.Context, playground.Source, playground.CompileOptions) (playground.CompileResult, error)
+		Execute(context.Context, playground.Source, playground.ExecuteOptions) (playground.ExecuteResult, error)
 	}
 
 	errorEnvelope struct {
@@ -57,6 +61,7 @@ func New(provider toolingProvider, service playground.Service, cfg config.Config
 
 	return &Handler{
 		provider: provider, service: service, limits: httpLimits(cfg), logger: logger,
+		maxExecutionTimeout: cfg.MaxExecutionTimeout, maxOutputBytes: cfg.MaxOutputBytes,
 		toolingLimits: playground.ToolingLimits{MaxSourceBytes: cfg.MaxSourceBytes, MaxBytecodeBytes: cfg.MaxBytecodeBytes, MaxFormattedSourceBytes: cfg.MaxFormattedSourceBytes},
 	}
 }
@@ -89,7 +94,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/v1/environment":
 		method = http.MethodGet
-	case "/api/v1/analyze", "/api/v1/format", "/api/v1/compile":
+	case "/api/v1/analyze", "/api/v1/format", "/api/v1/compile", "/api/v1/execute":
 	default:
 		h.writeError(response, r, http.StatusNotFound, "not_found", "The requested route does not exist.")
 
@@ -119,11 +124,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(response, r, http.StatusOK, playground.Environment{
 		APIVersion: "v1", Service: h.service, Runtime: description,
 		Capabilities: playground.Capabilities{
-			Environment: true, Analyze: true, Format: true, Compile: true,
+			Environment: true, Analyze: true, Format: true, Compile: true, Execute: true,
 			OptimizationLevels: playground.OptimizationLevels(), DefaultOptimization: playground.DefaultOptimization,
 			InspectionArtifacts: playground.InspectionArtifacts(),
 		},
-		Limits: playground.Limits{HTTP: h.limits, Tooling: h.toolingLimits},
+		Limits: playground.Limits{
+			HTTP: h.limits, Tooling: h.toolingLimits,
+			Execution: playground.ExecutionLimits{
+				MaxTimeoutMs:   float64(h.maxExecutionTimeout) / float64(time.Millisecond),
+				MaxOutputBytes: h.maxOutputBytes,
+			},
+		},
 	})
 }
 
@@ -149,6 +160,10 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, status int,
 }
 
 func (h *Handler) writeJSON(w http.ResponseWriter, r *http.Request, status int, value any) {
+	h.writeBufferedJSON(w, r, status, value, true)
+}
+
+func (h *Handler) writeBufferedJSON(w http.ResponseWriter, r *http.Request, status int, value any, checkContext bool) {
 	body, err := json.Marshal(value)
 	if err != nil {
 		h.logger.Error("HTTP response encoding failed", "code", "internal_error")
@@ -163,7 +178,7 @@ func (h *Handler) writeJSON(w http.ResponseWriter, r *http.Request, status int, 
 		body = []byte(`{"error":{"code":"response_too_large","message":"The generated response exceeds the configured limit."}}`)
 	}
 
-	if status == http.StatusOK && r.Context().Err() != nil {
+	if checkContext && status == http.StatusOK && r.Context().Err() != nil {
 		h.writeOperationError(w, r, r.Context().Err())
 
 		return

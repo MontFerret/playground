@@ -12,6 +12,7 @@ type (
 		call    func(context.Context) (playground.Runtime, error)
 		analyze func(context.Context, playground.Source) (playground.AnalysisResult, error)
 		format  func(context.Context, playground.Source, playground.FormatOptions) (playground.FormatResult, error)
+		execute func(context.Context, playground.Source, playground.ExecuteOptions) (playground.ExecuteResult, error)
 		compile func(context.Context, playground.Source, playground.CompileOptions) (playground.CompileResult, error)
 	}
 
@@ -48,4 +49,8 @@ func (v cancelingJSON) MarshalJSON() ([]byte, error) {
 	v.cancel()
 
 	return []byte(`{"status":"ok"}`), nil
+}
+
+func (p testProvider) Execute(ctx context.Context, src playground.Source, options playground.ExecuteOptions) (playground.ExecuteResult, error) {
+	return p.execute(ctx, src, options)
 }
