@@ -28,6 +28,7 @@ chmod 444 "$FIXTURE_TLS/key.pem" "$FIXTURE_TLS/cert.pem"
 FIXTURE_SPKI=$(openssl x509 -in "$FIXTURE_TLS/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl base64 -A)
 export FIXTURE_SPKI
 if [[ "${PLAYGROUND_USE_CACHED_IMAGES:-0}" != 1 ]]; then
+  docker compose pull --policy missing browser fixture
   docker compose build egress firewall relay
   if [[ -z "${PLAYGROUND_API_IMAGE:-}" ]]; then docker compose build api; fi
 fi

@@ -95,9 +95,13 @@ Both trap failures and remove the test project, networks and volumes.
 The private fixture uses JavaScript to render cards, explicit hold/release
 signals, state probes, and reachable forbidden-request canaries.
 
+The first run pulls the missing browser and Python fixture images and builds
+the local service images. Startup then uses only those prepared images, with
+API builds disabled when verifying an imported release archive.
 After caching the images, use `PLAYGROUND_USE_CACHED_IMAGES=1 make integration`
-to avoid builds and pulls. The suite requires Python 3, OpenSSL and Docker
-Compose, and does not require cloud credentials or public fixture websites.
+to skip image preparation and avoid builds and pulls. The suite requires
+Python 3, OpenSSL and Docker Compose, and does not require cloud credentials
+or public fixture websites.
 
 Native Linux/amd64 packaged verification is required before cutover. The
 website currently sends Worker's `{text, params}` body and reads raw output.
