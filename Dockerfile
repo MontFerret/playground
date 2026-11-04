@@ -7,7 +7,7 @@ COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/playground ./cmd/playground
 
-FROM ghcr.io/montferret/chromium:156.0.8078.80 AS api
+FROM ghcr.io/montferret/chromium@sha256:78c7fd698d088c639bc58221eb36565ce2c93a0b4f5af2cdf77fd3fb741eebf4 AS api
 USER 0:0
 LABEL org.opencontainers.image.source="https://github.com/MontFerret/playground" \
       org.opencontainers.image.title="Ferret Playground API" \

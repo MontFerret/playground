@@ -3,6 +3,7 @@ package containerhost
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ func runNamespace(ctx context.Context) error {
 	if err := isolateNetwork(); err != nil {
 		return err
 	}
+	slog.Info("Container isolation verified", "stage", "network_policy")
 
 	if err := os.Mkdir(stateDir+"/profile", 0700); err != nil {
 		return errors.New("profile_initialization_failed")
@@ -93,9 +95,6 @@ func runNamespace(ctx context.Context) error {
 		return errors.New("chromium_start_failed")
 	}
 	children["browser"] = child
-	if err := processIDs(children); err != nil {
-		return errors.New("process_tracking_failed")
-	}
 
 	startup, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -104,6 +103,8 @@ func runNamespace(ctx context.Context) error {
 		healthy := browsercheck.Healthy(check)
 		stop()
 		if healthy {
+			slog.Info("Container isolation verified", "stage", "renderer_sandbox")
+
 			break
 		}
 
@@ -130,7 +131,7 @@ func runNamespace(ctx context.Context) error {
 		return errors.New("network_probe_timeout")
 	}
 	delete(children, "network-check")
-	checks := serveChecks(ctx)
+	slog.Info("Container isolation verified", "stage", "browser_connections")
 
 	ready := os.NewFile(4, "readiness")
 	_, err = ready.Write([]byte{1})
@@ -149,8 +150,6 @@ func runNamespace(ctx context.Context) error {
 		return nil
 	case <-exited:
 		return errors.New("browser_process_exited")
-	case <-checks:
-		return errors.New("network_check_server_exited")
 	}
 }
 
@@ -158,38 +157,4 @@ func protectControlDescriptors() {
 	for _, fd := range []int{3, 4, 5} {
 		unix.CloseOnExec(fd)
 	}
-}
-
-func isolateNetwork() error {
-	interfaces, err := net.Interfaces()
-	if err != nil || len(interfaces) != 1 || interfaces[0].Name != "lo" {
-		return errors.New("private_network_unavailable")
-	}
-
-	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
-	if err != nil {
-		return errors.New("loopback_configuration_failed")
-	}
-	defer unix.Close(fd)
-	request, err := unix.NewIfreq("lo")
-	if err != nil {
-		return errors.New("loopback_configuration_failed")
-	}
-	request.SetUint16(unix.IFF_UP)
-	if err := unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, request); err != nil {
-		return errors.New("loopback_configuration_failed")
-	}
-
-	cmd := exec.Command("nft", "-f", "-")
-	cmd.Stdin = strings.NewReader(`add table inet playground
-add chain inet playground output { type filter hook output priority -150; policy accept; }
-add rule inet playground output meta skuid 10001 ip daddr 127.0.0.1 tcp dport 3128 accept
-add rule inet playground output meta skuid 10001 ip daddr 127.0.0.1 tcp sport 9223 ct direction reply ct state established accept
-add rule inet playground output meta skuid 10001 drop
-`)
-	if err := cmd.Run(); err != nil {
-		return errors.New("namespace_policy_unavailable")
-	}
-
-	return nil
 }

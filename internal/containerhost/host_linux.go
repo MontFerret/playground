@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -21,8 +20,8 @@ import (
 // Run dispatches private container process roles. No role is request-selectable.
 func Run(ctx context.Context, mode string) error {
 	switch mode {
-	case "", "probe":
-		return runContainer(ctx, mode == "probe")
+	case "":
+		return runContainer(ctx)
 	case "namespace":
 		return runNamespace(ctx)
 	case "proxy":
@@ -35,8 +34,6 @@ func Run(ctx context.Context, mode string) error {
 		return runRelay(ctx, "unix", stateDir+"/cdp.sock")
 	case "network-check":
 		return networkCheck(ctx)
-	case "check":
-		return requestNetworkCheck(ctx)
 	case "health":
 		return checkAPI(ctx)
 	default:
@@ -52,7 +49,7 @@ const (
 	apiUID       = 65532
 )
 
-func runContainer(ctx context.Context, probe bool) (result error) {
+func runContainer(ctx context.Context) (result error) {
 	if os.Geteuid() != 0 {
 		return errors.New("bootstrap_identity_required")
 	}
@@ -119,7 +116,7 @@ func runContainer(ctx context.Context, probe bool) (result error) {
 
 		// The profile lives on ephemeral container storage. Do not recursively
 		// walk an arbitrarily large browser cache on the shutdown critical path.
-		for _, name := range []string{"egress.sock", "cdp.sock", "check.sock", "processes"} {
+		for _, name := range []string{"egress.sock", "cdp.sock"} {
 			_ = os.Remove(filepath.Join(stateDir, name))
 		}
 
@@ -149,12 +146,6 @@ func runContainer(ctx context.Context, probe bool) (result error) {
 	}
 	defer control.Close()
 
-	checks, err := unixListener(stateDir+"/check.sock", 0, 0, 0600)
-	if err != nil {
-		return errors.New("check_listener_failed")
-	}
-	defer checks.Close()
-
 	ready, notify, err := os.Pipe()
 	if err != nil {
 		return errors.New("readiness_pipe_failed")
@@ -162,14 +153,20 @@ func runContainer(ctx context.Context, probe bool) (result error) {
 	defer ready.Close()
 	defer notify.Close()
 
-	worker, err = launch("namespace", 0, 0, []*os.File{control, notify, checks}, env, true)
+	parentNetwork, err := os.Open("/proc/self/ns/net")
 	if err != nil {
-		return errors.New("namespace_start_failed")
+		return isolationFailure("parent_network_namespace_open_failed", err)
+	}
+	defer parentNetwork.Close()
+
+	worker, err = launch("namespace", 0, 0, []*os.File{control, notify, parentNetwork}, env, true)
+	if err != nil {
+		return isolationFailure("namespace_start_failed", err)
 	}
 	workers = append(workers, worker)
+	_ = parentNetwork.Close()
 	_ = control.Close()
 	_ = notify.Close()
-	_ = checks.Close()
 	_ = ready.SetReadDeadline(time.Now().Add(40 * time.Second))
 	stopRead := context.AfterFunc(ctx, func() { _ = ready.Close() })
 	var reply [1]byte
@@ -177,10 +174,6 @@ func runContainer(ctx context.Context, probe bool) (result error) {
 	stopRead()
 	if err != nil || reply[0] != 1 {
 		return errors.New("browser_isolation_unavailable")
-	}
-
-	if probe {
-		return nil
 	}
 
 	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9222})
@@ -288,13 +281,4 @@ func containerEnvironment() []string {
 	}
 
 	return env
-}
-
-func processIDs(children map[string]*process) error {
-	var text strings.Builder
-	for name, child := range children {
-		text.WriteString(name + " " + strconv.Itoa(child.cmd.Process.Pid) + "\n")
-	}
-
-	return os.WriteFile(filepath.Join(stateDir, "processes"), []byte(text.String()), 0600)
 }

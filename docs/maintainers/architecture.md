@@ -190,6 +190,11 @@ drivers and document host settings. The launcher owns a new user/network namespa
 with only loopback. UID rules are installed inside that namespace before Chromium
 starts. Permission-protected Unix sockets bridge the trusted proxy and CDP relay
 to the parent namespace. There is no outer NET_ADMIN or SYS_ADMIN requirement.
+An inherited parent namespace descriptor lets the child verify a distinct
+network namespace by device/inode identity. That descriptor closes before
+helpers start and is protected against exec inheritance. Netlink interface
+enumeration remains required; bounded procfs inspection provides an independent
+diagnostic view. Additional interfaces are rejected rather than hidden or removed.
 API/proxy workers use UID 65532, Chromium UID 10001, and trusted namespace relays
 UID 10002. Namespace bootstrap root maps to outer UID 65530. The outer root
 supervisor owns identity setup and child termination; it serves no public HTTP.

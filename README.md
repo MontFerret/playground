@@ -19,6 +19,8 @@ covers host prerequisites, resource limits, browser ownership, and the product d
 [Release setup and recovery](docs/releasing.md) covers the two registries.
 [Cloud Run validation](docs/cloud-run.md) covers the required second-generation
 compatibility gate before release or production cutover.
+Current live validation fails the loopback-only namespace requirement: both
+interface inspectors report three interfaces. Startup remains closed.
 
 ```sh
 make integration       # private fixtures, actual development API image

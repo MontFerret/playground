@@ -31,7 +31,7 @@ func networkCheck(ctx context.Context) error {
 		return errors.New("direct_browser_udp_available")
 	}
 
-	for _, path := range []string{stateDir + "/egress.sock", stateDir + "/cdp.sock", stateDir + "/check.sock"} {
+	for _, path := range []string{stateDir + "/egress.sock", stateDir + "/cdp.sock"} {
 		conn, err := dialer.DialContext(ctx, "unix", path)
 		if err == nil {
 			_ = conn.Close()
