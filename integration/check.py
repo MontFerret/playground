@@ -168,7 +168,7 @@ def checks():
     assert request("execute", {})[0] == 400
     # Normal startup already ran the browser-UID namespace probes.
     api_exec("curl", "-fsS", "http://127.0.0.1:9222/json/version")
-    api_exec("sh", "-c", "test ! -e /tmp/playground/check.sock && test ! -e /tmp/playground/processes")
+    api_exec("sh", "-c", "test ! -e /tmp/playground/check.sock && test ! -e /tmp/playground/cdp.sock && test ! -e /tmp/playground/processes")
     discover(api)
     baseline = targets()
     assert json.loads(execute(state("/write"))) == ["run=private","private","private"]
@@ -240,7 +240,7 @@ def checks():
             docker("start", api)
             addr = docker("port", api, "8080/tcp")
             eventually(ready, timeout=60)
-    for role in ("browser", "proxy-relay"):
+    for role in ("browser", "proxy-relay", "cdp-relay", "proxy", "namespace", "api"):
         docker("start", api)
         addr = docker("port", api, "8080/tcp")
         eventually(ready, timeout=60)

@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -16,7 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func runNamespace(ctx context.Context) error {
+func runNamespace(ctx context.Context) (result error) {
 	// These descriptors were explicitly inherited from the supervisor. Only
 	// ExtraFiles may pass them onward; Chromium must not inherit control FDs.
 	protectControlDescriptors()
@@ -34,42 +32,35 @@ func runNamespace(ctx context.Context) error {
 		return errors.New("profile_identity_failed")
 	}
 
-	children := make(map[string]*process)
+	env := os.Environ() // Already filtered and validated by the outer supervisor.
+	var proxy, cdp, browser, probe *process
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		var wg sync.WaitGroup
-		for _, child := range children {
-			wg.Go(func() { child.stop(cleanup) })
+		if err := stopProcesses(cleanup, probe, browser, cdp, proxy); err != nil && result == nil {
+			result = err
 		}
-		wg.Wait()
 	}()
 
-	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 3128})
-	if err != nil {
-		return errors.New("namespace_proxy_listener_failed")
-	}
-	file, err := listener.File()
-	_ = listener.Close()
+	file, err := tcpListener(3128)
 	if err != nil {
 		return errors.New("namespace_proxy_listener_failed")
 	}
 	defer file.Close()
 
-	child, err := launch("proxy-relay", helperUID, apiUID, []*os.File{file}, containerEnvironment(), false)
+	proxy, err = launch("proxy-relay", helperUID, apiUID, []*os.File{file}, env, false)
 	if err != nil {
 		return errors.New("namespace_proxy_start_failed")
 	}
-	children["proxy-relay"] = child
 	_ = file.Close()
 
 	control := os.NewFile(3, "control")
-	child, err = launch("cdp-relay", helperUID, apiUID, []*os.File{control}, containerEnvironment(), false)
-	_ = control.Close()
+	defer control.Close()
+	cdp, err = launch("cdp-relay", helperUID, apiUID, []*os.File{control}, env, false)
 	if err != nil {
 		return errors.New("namespace_control_start_failed")
 	}
-	children["cdp-relay"] = child
+	_ = control.Close()
 
 	args := []string{"--headless=new", "--user-data-dir=" + stateDir + "/profile", "--no-first-run",
 		"--disable-dev-shm-usage",
@@ -90,11 +81,10 @@ func runNamespace(ctx context.Context) error {
 	cmd := exec.Command("chrome", args...)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + stateDir + "/profile"}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: identity(browserUID, browserUID)}
-	child, err = startProcess(cmd)
+	browser, err = startProcess(cmd)
 	if err != nil {
 		return errors.New("chromium_start_failed")
 	}
-	children["browser"] = child
 
 	startup, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -111,26 +101,35 @@ func runNamespace(ctx context.Context) error {
 		select {
 		case <-startup.Done():
 			return errors.New("renderer_sandbox_unavailable")
-		case <-children["browser"].done:
-			return errors.New("chromium_exited")
+		case <-browser.done:
+			return browser.failure("chromium_exited")
+		case <-proxy.done:
+			return proxy.failure("proxy_relay_exited")
+		case <-cdp.done:
+			return cdp.failure("cdp_relay_exited")
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
 
-	check, err := launch("network-check", browserUID, browserUID, nil, containerEnvironment(), false)
+	probe, err = launch("network-check", browserUID, browserUID, nil, env, false)
 	if err != nil {
 		return errors.New("network_probe_start_failed")
 	}
-	children["network-check"] = check
 	select {
-	case <-check.done:
-		if check.err != nil {
+	case <-probe.done:
+		if probe.err != nil {
 			return errors.New("network_isolation_unavailable")
 		}
 	case <-startup.Done():
 		return errors.New("network_probe_timeout")
+	case <-browser.done:
+		return browser.failure("chromium_exited")
+	case <-proxy.done:
+		return proxy.failure("proxy_relay_exited")
+	case <-cdp.done:
+		return cdp.failure("cdp_relay_exited")
 	}
-	delete(children, "network-check")
+	probe = nil // The successful one-shot probe has already been reaped.
 	slog.Info("Container isolation verified", "stage", "browser_connections")
 
 	ready := os.NewFile(4, "readiness")
@@ -140,16 +139,15 @@ func runNamespace(ctx context.Context) error {
 		return errors.New("readiness_notification_failed")
 	}
 
-	exited := make(chan struct{}, len(children))
-	for _, child := range children {
-		go func() { <-child.done; exited <- struct{}{} }()
-	}
-
 	select {
 	case <-ctx.Done():
 		return nil
-	case <-exited:
-		return errors.New("browser_process_exited")
+	case <-browser.done:
+		return browser.failure("chromium_exited")
+	case <-proxy.done:
+		return proxy.failure("proxy_relay_exited")
+	case <-cdp.done:
+		return cdp.failure("cdp_relay_exited")
 	}
 }
 

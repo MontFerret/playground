@@ -2,9 +2,15 @@ package containerhost
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"os/exec"
 	"syscall"
+	"time"
 )
+
+// Reserve part of every stop deadline for SIGKILL and the sole Wait owner.
+const reapTimeout = 250 * time.Millisecond
 
 type process struct {
 	cmd  *exec.Cmd
@@ -33,6 +39,18 @@ func startProcess(cmd *exec.Cmd) (*process, error) {
 	return p, nil
 }
 
+// failure is called only after done closes. Even a successful essential-child
+// exit is unexpected; retain only numeric status and the caller's fixed code.
+func (p *process) failure(code string) error {
+	signal := 0
+	if status, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+		signal = int(status.Signal())
+	}
+	slog.Error("Container child exited", "stage", code, "exitStatus", p.cmd.ProcessState.ExitCode(), "signal", signal)
+
+	return errors.New(code)
+}
+
 func (p *process) stop(ctx context.Context) {
 	select {
 	case <-p.done:
@@ -40,16 +58,29 @@ func (p *process) stop(ctx context.Context) {
 	default:
 	}
 
+	// Never spend the full deadline waiting for SIGTERM: force termination
+	// early enough for Wait to reap the child before its owner can disappear.
+	grace := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		grace, cancel = context.WithDeadline(ctx, deadline.Add(-reapTimeout))
+		defer cancel()
+	}
+
 	_ = p.cmd.Process.Signal(syscall.SIGTERM)
 	select {
 	case <-p.done:
 		return
-	case <-ctx.Done():
+	case <-grace.Done():
+	}
+
+	select {
+	case <-p.done:
+		return
+	default:
 	}
 
 	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
-
-	// The caller's deadline also bounds waiting for a killed process.
 	select {
 	case <-p.done:
 	case <-ctx.Done():

@@ -58,7 +58,7 @@ def discover(container):
             role = "api"
         elif len(args) == 3 and args[:2] == ("/usr/bin/playground", "container"):
             role = args[2]
-            if role not in ("namespace", "proxy", "proxy-relay", "cdp-relay", "control-relay"):
+            if role not in ("namespace", "proxy", "proxy-relay", "cdp-relay"):
                 continue
         elif (args and args[0] == "chrome" and "--remote-debugging-port=9223" in args
               and "--user-data-dir=/tmp/playground/profile" in args
@@ -71,7 +71,7 @@ def discover(container):
         assert role not in roles, f"ambiguous process role: {role}"
         roles[role] = process
     expected = {"init": "0", "supervisor": "0", "namespace": "65530", "proxy": "65532", "api": "65532",
-                "proxy-relay": "10002", "cdp-relay": "10002", "browser": "10001", "control-relay": "65532"}
+                "proxy-relay": "10002", "cdp-relay": "10002", "browser": "10001"}
     assert roles.keys() == expected.keys(), f"unexpected process roles: {roles.keys()}"
     for role, uid in expected.items():
         process = roles[role]

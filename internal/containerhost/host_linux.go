@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,8 +29,6 @@ func Run(ctx context.Context, mode string) error {
 		return runRelay(ctx, "unix", stateDir+"/egress.sock")
 	case "cdp-relay":
 		return runRelay(ctx, "tcp4", "127.0.0.1:9223")
-	case "control-relay":
-		return runRelay(ctx, "unix", stateDir+"/cdp.sock")
 	case "network-check":
 		return networkCheck(ctx)
 	case "health":
@@ -82,8 +79,7 @@ func runContainer(ctx context.Context) (result error) {
 		return errors.New("state_initialization_failed")
 	}
 
-	var workers []*process
-	var api *process
+	var proxy, namespace, api *process
 	defer func() {
 		started := time.Now()
 		slog.Info("Container cleanup started")
@@ -92,7 +88,7 @@ func runContainer(ctx context.Context) (result error) {
 		cleanup, cancel := context.WithTimeout(context.Background(), 8500*time.Millisecond)
 		defer cancel()
 		if api != nil {
-			drain, stop := context.WithTimeout(cleanup, 7*time.Second)
+			drain, stop := context.WithTimeout(cleanup, 7*time.Second+reapTimeout)
 			api.stop(drain)
 			stop()
 
@@ -108,17 +104,12 @@ func runContainer(ctx context.Context) (result error) {
 			}
 		}
 
-		var wg sync.WaitGroup
-		for _, worker := range workers {
-			wg.Go(func() { worker.stop(cleanup) })
+		if err := stopProcesses(cleanup, namespace, proxy); err != nil && result == nil {
+			result = err
 		}
-		wg.Wait()
 
-		// The profile lives on ephemeral container storage. Do not recursively
-		// walk an arbitrarily large browser cache on the shutdown critical path.
-		for _, name := range []string{"egress.sock", "cdp.sock"} {
-			_ = os.Remove(filepath.Join(stateDir, name))
-		}
+		// The profile is ephemeral; never walk its cache on the shutdown path.
+		_ = os.Remove(stateDir + "/egress.sock")
 
 		slog.Info("Container cleanup finished", "elapsedMs", time.Since(started).Milliseconds())
 	}()
@@ -127,20 +118,19 @@ func runContainer(ctx context.Context) (result error) {
 		return errors.New("state_identity_failed")
 	}
 
-	proxy, err := unixListener(stateDir+"/egress.sock", helperUID, apiUID, 0660)
+	egress, err := unixListener(stateDir+"/egress.sock", helperUID, apiUID, 0660)
 	if err != nil {
 		return errors.New("proxy_listener_failed")
 	}
-	defer proxy.Close()
+	defer egress.Close()
 
-	worker, err := launch("proxy", apiUID, apiUID, []*os.File{proxy}, env, false)
+	proxy, err = launch("proxy", apiUID, apiUID, []*os.File{egress}, env, false)
 	if err != nil {
 		return errors.New("proxy_start_failed")
 	}
-	workers = append(workers, worker)
-	_ = proxy.Close()
+	_ = egress.Close()
 
-	control, err := unixListener(stateDir+"/cdp.sock", helperUID, apiUID, 0660)
+	control, err := tcpListener(9222)
 	if err != nil {
 		return errors.New("control_listener_failed")
 	}
@@ -159,40 +149,24 @@ func runContainer(ctx context.Context) (result error) {
 	}
 	defer parentNetwork.Close()
 
-	worker, err = launch("namespace", 0, 0, []*os.File{control, notify, parentNetwork}, env, true)
+	namespace, err = launch("namespace", 0, 0, []*os.File{control, notify, parentNetwork}, env, true)
 	if err != nil {
 		return isolationFailure("namespace_start_failed", err)
 	}
-	workers = append(workers, worker)
 	_ = parentNetwork.Close()
 	_ = control.Close()
 	_ = notify.Close()
-	_ = ready.SetReadDeadline(time.Now().Add(40 * time.Second))
-	stopRead := context.AfterFunc(ctx, func() { _ = ready.Close() })
-	var reply [1]byte
-	_, err = ready.Read(reply[:])
-	stopRead()
-	if err != nil || reply[0] != 1 {
-		return errors.New("browser_isolation_unavailable")
+	if err := awaitBrowser(ctx, ready, proxy, namespace); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+
+		return err
 	}
 
-	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9222})
-	if err != nil {
-		return errors.New("control_relay_listener_failed")
+	if ctx.Err() != nil {
+		return nil
 	}
-	file, err := listener.File()
-	_ = listener.Close()
-	if err != nil {
-		return errors.New("control_relay_listener_failed")
-	}
-	defer file.Close()
-
-	worker, err = launch("control-relay", apiUID, apiUID, []*os.File{file}, env, false)
-	if err != nil {
-		return errors.New("control_relay_start_failed")
-	}
-	workers = append(workers, worker)
-	_ = file.Close()
 
 	cmd := exec.Command("/usr/bin/playground")
 	cmd.Env = env
@@ -203,17 +177,72 @@ func runContainer(ctx context.Context) (result error) {
 		return errors.New("api_start_failed")
 	}
 
-	exited := make(chan struct{}, len(workers)+1)
-	for _, child := range append(workers, api) {
-		go func() { <-child.done; exited <- struct{}{} }()
-	}
-
 	select {
 	case <-ctx.Done():
 		return nil
-	case <-exited:
-		return errors.New("essential_process_exited")
+	case <-api.done:
+		return api.failure("api_process_exited")
+	case <-proxy.done:
+		return proxy.failure("proxy_process_exited")
+	case <-namespace.done:
+		return namespace.failure("namespace_process_exited")
 	}
+}
+
+// Only the pipe reader is short-lived. Child completion comes directly from
+// each process's sole Wait owner, during startup as well as serving.
+func awaitBrowser(ctx context.Context, ready *os.File, proxy, namespace *process) error {
+	_ = ready.SetReadDeadline(time.Now().Add(40 * time.Second))
+	result := make(chan error, 1)
+	go func() {
+		var reply [1]byte
+		_, err := ready.Read(reply[:])
+		if err != nil || reply[0] != 1 {
+			err = errors.New("browser_isolation_unavailable")
+		}
+		result <- err
+		close(result)
+	}()
+	defer func() {
+		_ = ready.Close()
+		for range result {
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-proxy.done:
+		return proxy.failure("proxy_process_exited")
+	case <-namespace.done:
+		return namespace.failure("namespace_process_exited")
+	case err := <-result:
+		return err
+	}
+}
+
+func stopProcesses(ctx context.Context, children ...*process) error {
+	var wg sync.WaitGroup
+	for _, child := range children {
+		if child != nil {
+			wg.Go(func() { child.stop(ctx) })
+		}
+	}
+	wg.Wait()
+
+	for _, child := range children {
+		if child == nil {
+			continue
+		}
+
+		select {
+		case <-child.done:
+		default:
+			return errors.New("child_shutdown_timeout")
+		}
+	}
+
+	return nil
 }
 
 func launch(role string, uid, gid uint32, files []*os.File, env []string, namespace bool) (*process, error) {
@@ -256,6 +285,18 @@ func unixListener(path string, uid, gid int, mode os.FileMode) (*os.File, error)
 	if err := os.Chown(path, uid, gid); err != nil {
 		return nil, err
 	}
+
+	return listener.File()
+}
+
+// A listener retains the network namespace in which it was created. The CDP
+// relay accepts parent-loopback connections while dialing browser loopback.
+func tcpListener(port int) (*os.File, error) {
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+	if err != nil {
+		return nil, err
+	}
+	defer listener.Close()
 
 	return listener.File()
 }

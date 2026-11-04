@@ -42,11 +42,11 @@ Cloud Run compatibility based only on Docker tests.
 ## Ownership and enforcement
 
 The trusted outer supervisor starts a non-root proxy, creates a private browser
-user/network namespace, and connects it through permission-protected Unix
-sockets. The namespace has only loopback and no external interface or route.
+user/network namespace, and passes private listener descriptors into it. The
+namespace has only loopback and no external interface or route.
 Its bootstrap root maps to outer UID 65530. It installs UID-specific nftables
 rules there, then starts Chromium as UID 10001 and trusted relays as UID 10002.
-The API and outer serving helpers run as UID 65532.
+The API and outer proxy run as UID 65532.
 Inherited supplementary groups are cleared before any worker starts.
 
 The supervisor passes its network-namespace descriptor to the namespace child.
@@ -60,17 +60,28 @@ addresses, raw child errors or request data.
 
 The browser UID may open only the namespace proxy port, and may reply to
 established trusted CDP connections. Other TCP, UDP, IPv6, DNS, metadata,
-loopback control, and direct external connections are denied. The Unix bridges
-are inaccessible to that UID. The proxy accepts only CONNECT to
+loopback control, and direct external connections are denied. The egress Unix
+socket is inaccessible to that UID. The proxy accepts only CONNECT to
 `mockery.ferretlang.org:443`, rejects every nonpublic IPv4 DNS answer, and dials the
 validated numeric public address without a second lookup.
+
+Two relays bridge the network boundary. `proxy-relay` runs as UID 10002 in the
+browser namespace: Chromium connects to its loopback TCP port 3128, and it dials
+permission-protected `egress.sock`, served by the outer proxy. Chromium requires
+a TCP proxy endpoint; the relay lets it use the enforcing proxy without an
+external network interface. `cdp-relay` also runs as UID 10002 in the browser
+namespace. It inherits a listener created on parent loopback port 9222 and dials
+Chromium on browser loopback port 9223. The listening socket retains its parent
+network namespace across inheritance, so the API's pinned HTTP/WebSocket client
+connects directly through this one relay. There is no CDP Unix socket or outer
+control-relay process. Only the API port is published.
 
 Readiness checks actual renderer UIDs, nested PID namespaces and additional
 seccomp filters. It also executes direct-connection and Unix-socket bypass
 probes as the browser UID inside the actual namespace, with a positive proxy
 control. The CDP relay binds only parent loopback. These probes run once during
-normal startup; the API opens only after they succeed. Integration tests inspect and
-signal children through test-side process discovery, without a production
+normal startup; the API opens only after they succeed. Integration tests inspect
+and signal children through test-side process discovery, without a production
 operator socket or published PID inventory.
 
 Chromium's profile is private ephemeral storage. Managed policy blocks file and
@@ -84,8 +95,10 @@ On SIGTERM the supervisor signals the API first. HTTP admission closes and the
 API drains before cancellation and native/browser cleanup. Only afterwards are
 browser and proxy process groups stopped. Tini reaps orphaned descendants.
 Unexpected browser, proxy or relay exit terminates the whole container. The
-same bounded cleanup covers partial initialization. The profile is discarded
-with container storage instead of recursively walking caches during shutdown.
+same bounded cleanup covers partial initialization. The API receives its full
+seven-second drain/cleanup allowance; stop deadlines reserve 250 ms for forced
+termination and reaping inside the overall 8.5-second budget. The profile is
+discarded with container storage instead of recursively walking caches during shutdown.
 
 ## Examples
 

@@ -2,7 +2,10 @@ package containerhost
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -56,12 +59,12 @@ func TestStopKillsAndReapsProcessGroup(t *testing.T) {
 		t.Fatalf("child readiness: %q, %v", line, err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	child.stop(ctx)
 	select {
 	case <-child.done:
-	case <-time.After(2 * time.Second):
+	default:
 		t.Fatal("child was not reaped")
 	}
 
@@ -85,5 +88,136 @@ func TestContainerEnvironmentOwnsControlAndFiltersCredentials(t *testing.T) {
 	if !strings.Contains(env, "PLAYGROUND_CDP_ORIGIN=http://127.0.0.1:9222") ||
 		!strings.Contains(env, "PLAYGROUND_ALLOWED_ORIGINS=https://ferretlang.org") {
 		t.Fatal("container lost its enforced control endpoint or operator CORS setting")
+	}
+}
+
+func TestAwaitBrowserRequiresReadiness(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply []byte
+		code  string
+	}{
+		{"ready", []byte{1}, ""},
+		{"invalid", []byte{0}, "browser_isolation_unavailable"},
+		{"closed", nil, "browser_isolation_unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ready, notify, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ready.Close()
+			defer notify.Close()
+			if _, err := notify.Write(tc.reply); err != nil {
+				t.Fatal(err)
+			}
+			_ = notify.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			pending := &process{done: make(chan struct{})}
+			err = awaitBrowser(ctx, ready, pending, pending)
+			if tc.code == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || err.Error() != tc.code {
+				t.Fatalf("readiness error: %v", err)
+			}
+
+			if _, err := ready.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatal("readiness reader remained open")
+			}
+		})
+	}
+}
+
+func TestAwaitBrowserCancellationClosesReader(t *testing.T) {
+	ready, notify, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ready.Close()
+	defer notify.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pending := &process{done: make(chan struct{})}
+	if err := awaitBrowser(ctx, ready, pending, pending); !errors.Is(err, context.Canceled) {
+		t.Fatalf("startup cancellation: %v", err)
+	}
+
+	if _, err := ready.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatal("canceled startup left its reader open")
+	}
+}
+
+func TestAwaitBrowserDetectsEssentialExit(t *testing.T) {
+	for _, role := range []string{"proxy", "namespace"} {
+		t.Run(role, func(t *testing.T) {
+			child, err := startProcess(exec.Command("/bin/sh", "-c", "exit 23"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-child.done
+			ready, notify, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ready.Close()
+			defer notify.Close()
+			pending := &process{done: make(chan struct{})}
+			proxy, namespace := child, pending
+			if role == "namespace" {
+				proxy, namespace = pending, child
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := awaitBrowser(ctx, ready, proxy, namespace); err == nil || err.Error() != role+"_process_exited" {
+				t.Fatalf("startup child exit: %v", err)
+			}
+		})
+	}
+}
+
+func TestProcessFailureKeepsOnlyFixedCodeAndNumericStatus(t *testing.T) {
+	child, err := startProcess(exec.Command("/bin/sh", "-c", "exit 23", "private-child-value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-child.done
+	var output bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	if err := child.failure("proxy_process_exited"); err.Error() != "proxy_process_exited" {
+		t.Fatal("child error lost its fixed code")
+	}
+
+	if !strings.Contains(output.String(), `"exitStatus":23`) || strings.Contains(output.String(), "private-child-value") {
+		t.Fatal("child failure lost its status or leaked command data")
+	}
+}
+
+func TestStopProcessesRollsBackPartialStartup(t *testing.T) {
+	child, err := startProcess(exec.Command("/bin/sh", "-c", "exec sleep 30"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		child.stop(ctx)
+	})
+	cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := stopProcesses(cleanup, nil, child, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-child.done:
+	default:
+		t.Fatal("rollback returned before reaping its child")
 	}
 }

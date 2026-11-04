@@ -188,8 +188,10 @@ The module registers upstream DOCUMENT only. A run-local driver container carrie
 the owned browser execution. Host policy rejects cookie reuse, parse, arbitrary
 drivers and document host settings. The launcher owns a new user/network namespace
 with only loopback. UID rules are installed inside that namespace before Chromium
-starts. Permission-protected Unix sockets bridge the trusted proxy and CDP relay
-to the parent namespace. There is no outer NET_ADMIN or SYS_ADMIN requirement.
+starts. A permission-protected Unix socket bridges the trusted proxy to the
+parent namespace. The CDP relay inherits a parent-loopback TCP listener and
+connects to browser loopback directly; the API retains its HTTP/WebSocket client.
+There is no outer NET_ADMIN or SYS_ADMIN requirement.
 An inherited parent namespace descriptor lets the child verify a distinct
 network namespace by device/inode identity. That descriptor closes before
 helpers start and is protected against exec inheritance. Netlink interface
@@ -204,7 +206,12 @@ the browser UID in the real namespace before starting HTTP. On termination it
 signals the API first, preserves the browser through native cleanup, and then
 stops the remaining process groups under one fresh 8.5-second budget. Tini reaps
 orphaned descendants. The profile disappears with ephemeral container storage.
-Unexpected essential-child exit follows the same bounded shutdown path.
+Each essential child has one Wait owner. Startup and serving observe its retained
+completion channel directly; the one-shot browser-UID probe has separate startup
+ownership. The filtered environment is built once by the supervisor. Unexpected
+essential-child exit reports a fixed role code with numeric status and follows
+the same bounded shutdown path. Stop deadlines reserve time for forced
+termination and reaping, without shortening the API drain/cleanup allowance.
 See [deployment enforcement](../deployment.md).
 
 The pinned HTML module starts its navigation subscription after Page.navigate,
