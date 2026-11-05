@@ -83,9 +83,15 @@ go test ./internal/runtimehost -run '^$' -bench '^BenchmarkFragmentedOutput$' -b
 `make release-snapshot` builds and imports the GoReleaser OCI archive before
 running that same suite. Both require native Linux/amd64 and a working
 unprivileged Chromium sandbox. See [deployment guidance](../../deployment.md).
-These targets are separate from fast Go tests.
+These targets are separate from fast Go tests. Process inspection and failure
+injection require a local Linux Docker daemon, Python with pidfd support, and
+root access (or noninteractive `sudo`) for host procfs inspection. Container privileges are unchanged.
 The suite has a separate test-only TLS fixture container. It exercises namespace
-denial during partial initialization, direct connections from the actual browser
-namespace, essential-child failure, and whole-container shutdown under nine
-seconds. Local Docker success is separate from the mandatory real Cloud Run
+denial through the normal release entrypoint, startup connection probes from the
+actual browser namespace, essential-child failure using test-side process discovery,
+and whole-container shutdown under nine seconds. Local Docker success is separate from the mandatory real Cloud Run
 compatibility checks in [Cloud Run validation](../../cloud-run.md).
+Separate packaged cases deny NETLINK_ROUTE and NETLINK_NETFILTER sockets and
+require the ordinary entry point to exit without opening HTTP. Route denial
+remains a failure: live Cloud Run inspection succeeded and exposed an invalid
+three-interface layout, so the conditional procfs-only replacement was not made.

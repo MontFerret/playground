@@ -1,4 +1,5 @@
 """Black-box checks of the API image selected by integration/run.sh."""
+import dataclasses
 import http.client
 import json
 import os
@@ -7,6 +8,8 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+
+from processes import discover, kill_checked
 
 
 api = os.environ["PLAYGROUND_API_CONTAINER"]
@@ -19,6 +22,12 @@ def docker(*args):
 
 def api_exec(*args):
     return docker("exec", api, *args)
+
+
+def api_logs():
+    # Docker forwards container stderr to CLI stderr. Capture both streams so
+    # redaction assertions cover the service's actual operational log stream.
+    return subprocess.check_output(["docker", "logs", api], text=True, stderr=subprocess.STDOUT)
 
 
 addr = docker("port", api, "8080/tcp")
@@ -130,6 +139,12 @@ def checks():
             return False
 
     eventually(ready, timeout=60)
+    startup = [json.loads(line) for line in api_logs().splitlines()]
+    assert any(entry.get("msg") == "Container network namespace inspection" and entry.get("distinct") is True for entry in startup)
+    assert any(entry.get("msg") == "Container network inspection" and entry.get("netlinkOnlyLoopback") is True
+               and entry.get("procfsOnlyLoopback") is True and entry.get("netlinkOK") is True and entry.get("procfsOK") is True for entry in startup)
+    assert {entry.get("stage") for entry in startup if entry.get("msg") == "Container isolation verified"} == {
+        "network_policy", "renderer_sandbox", "browser_connections"}
     bindings = json.loads(docker("inspect", "--format", "{{json .NetworkSettings.Ports}}", api))
     assert bindings["8080/tcp"][0]["HostIp"] == "127.0.0.1", bindings
     assert not bindings.get("9222/tcp"), bindings
@@ -151,15 +166,10 @@ def checks():
     assert request("execute", method="OPTIONS", headers={"Access-Control-Request-Method":"POST",
                    "Access-Control-Request-Headers":"Content-Type"})[0] == 204
     assert request("execute", {})[0] == 400
-    # This root-only command runs bypass attempts as the browser UID inside
-    # its actual user/network namespace, with positive proxy/CDP controls.
-    api_exec("/usr/bin/playground", "container", "check")
+    # Normal startup already ran the browser-UID namespace probes.
     api_exec("curl", "-fsS", "http://127.0.0.1:9222/json/version")
-    pids = dict(line.split() for line in api_exec("cat", "/tmp/playground/processes").splitlines())
-    for role, pid in pids.items():
-        status = dict(line.split(":", 1) for line in api_exec("cat", f"/proc/{pid}/status").splitlines())
-        assert not status["Groups"].strip(), (role, status["Groups"])
-        assert set(status["Uid"].split()) == ({"10001"} if role == "browser" else {"10002"}), role
+    api_exec("sh", "-c", "test ! -e /tmp/playground/check.sock && test ! -e /tmp/playground/cdp.sock && test ! -e /tmp/playground/processes")
+    discover(api)
     baseline = targets()
     assert json.loads(execute(state("/write"))) == ["run=private","private","private"]
     assert json.loads(execute(state("/read"))) == ["","",""]
@@ -196,7 +206,7 @@ def checks():
         status, body = request("execute", program(query, options=options))
         assert status == 200 and body["status"] == "failed" and "output" not in body and body["diagnostics"][0]["code"] == code, body
     control("release","deadline")
-    assert marker not in docker("logs", api)
+    assert marker not in api_logs()
 
     shutdowns = []
     for force in (False, True):
@@ -230,18 +240,24 @@ def checks():
             docker("start", api)
             addr = docker("port", api, "8080/tcp")
             eventually(ready, timeout=60)
-    for role in ("browser", "proxy-relay"):
+    for role in ("browser", "proxy-relay", "cdp-relay", "proxy", "namespace", "api"):
         docker("start", api)
         addr = docker("port", api, "8080/tcp")
         eventually(ready, timeout=60)
         assert json.loads(execute(state("/read"))) == ["", "", ""]
-        pids = dict(line.split() for line in api_exec("cat", "/tmp/playground/processes").splitlines())
+        child = discover(api)[role]
+        try:
+            kill_checked(api, dataclasses.replace(child, started="0"))
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            raise AssertionError("failure injection accepted a changed process identity")
         before = time.monotonic()
-        api_exec("kill", "-KILL", pids[role])
+        kill_checked(api, child)
         code = subprocess.check_output(["docker", "wait", api], text=True, timeout=10).strip()
         assert code != "0" and time.monotonic() - before < 9, (role, code)
         assert docker("inspect", "--format", "{{.State.Pid}}", api) == "0"
-        assert marker not in docker("logs", api)
+        assert marker not in api_logs()
     resources = json.loads(docker("inspect", "--format", "{{json .HostConfig}}", api))
     print("Verification evidence: " + json.dumps({
         "runner": docker("info", "--format", "{{.OperatingSystem}} {{.Architecture}} {{.KernelVersion}}"),

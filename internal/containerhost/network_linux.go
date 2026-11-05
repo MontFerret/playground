@@ -17,7 +17,7 @@ func networkCheck(ctx context.Context) error {
 	}
 
 	dialer := &net.Dialer{Timeout: time.Second}
-	for _, address := range []string{"127.0.0.1:9223", "127.0.0.1:8080", "169.254.169.254:80", "1.1.1.1:443", "[::1]:9223"} {
+	for _, address := range []string{"127.0.0.1:9222", "127.0.0.1:9223", "127.0.0.1:8080", "169.254.169.254:80", "1.1.1.1:443", "[::1]:9223"} {
 		conn, err := dialer.DialContext(ctx, "tcp", address)
 		if err == nil {
 			_ = conn.Close()
@@ -31,12 +31,10 @@ func networkCheck(ctx context.Context) error {
 		return errors.New("direct_browser_udp_available")
 	}
 
-	for _, path := range []string{stateDir + "/egress.sock", stateDir + "/cdp.sock", stateDir + "/check.sock"} {
-		conn, err := dialer.DialContext(ctx, "unix", path)
-		if err == nil {
-			_ = conn.Close()
-			return errors.New("browser_control_socket_available")
-		}
+	conn, err = dialer.DialContext(ctx, "unix", stateDir+"/egress.sock")
+	if err == nil {
+		_ = conn.Close()
+		return errors.New("browser_control_socket_available")
 	}
 
 	// A positive control proves the browser can use the policy-enforcing proxy.

@@ -1,11 +1,11 @@
-# Cloud Run compatibility and no-traffic validation
+# Cloud Run compatibility and isolated validation
 
 The deployment target is one Linux/amd64 container on standard second-generation
 Cloud Run. No sidecars, separate browser service, Sandboxes preview, added outer
 capabilities, or disabled Chromium sandbox are part of this design.
 
-Local Docker verification is complete only for the tested Linux host. **Real
-Cloud Run compatibility is not yet verified and blocks release.** In particular,
+Local Docker verification is complete only for the tested Linux host. **Live
+Cloud Run validation failed and blocks release.** In particular,
 Cloud Run must allow the new user/network namespace and namespace-local nftables
 under its standard policy. Failure leaves HTTP unopened and logs a fixed stage
 code. Do not bypass the check or weaken isolation to make a revision ready.
@@ -18,9 +18,12 @@ not evidence that this image passed its checks on Cloud Run.
 ## Prerequisites
 
 Perform this procedure only as a separately approved cloud operation. It writes
-a private validation image reference and creates a zero-traffic revision. Use an
-existing authenticated validation service with an approved baseline revision;
-provisioning its first revision and invocation IAM is a separate setup step.
+a unique private validation image reference and creates a separate authenticated
+service named `playground-validation`. Its first healthy revision receives only
+explicit authenticated test requests at that service's URL. The production
+`playground` service and its traffic are not changed. Do not reuse an unrelated
+existing validation service. An existing approved service with a healthy baseline
+can instead use a tagged zero-traffic revision.
 
 Use project `montferret`, region `us-east1`, and a dedicated runtime service
 account `playground-runtime@montferret.iam.gserviceaccount.com` with no project
@@ -29,6 +32,9 @@ repository read access. The deploying identity needs Cloud Run deployment and
 service-account-use permissions; the testing identity needs Cloud Run Invoker.
 The release service account and GitHub credentials are never attached to the
 runtime container.
+
+The runtime account was created during the 2026-11-03 validation without project
+role grants. Reuse it; do not attach the default Compute Engine identity.
 
 Start validation with two vCPUs, 2 GiB memory, HTTP concurrency 16, execution
 capacity two, and one validation instance. HTTP concurrency above two permits
@@ -61,7 +67,7 @@ test "$(skopeo manifest-digest /tmp/playground-validation-remote.json)" = "$clou
 This does not move a full-version, minor or latest tag. Registry writes and later
 publication remain separately authorized actions.
 
-## Deploy a tagged revision with zero traffic
+## Deploy the separate authenticated service
 
 The command uses the image's single-container launcher, the standard gen2
 runtime policy, and no Cloud Run preview features:
@@ -73,22 +79,19 @@ gcloud run deploy "$cloud_run_service" --project=montferret --region=us-east1 \
   --service-account=playground-runtime@montferret.iam.gserviceaccount.com \
   --cpu=2 --memory=2Gi --no-cpu-boost --concurrency=16 --timeout=30s \
   --min-instances=0 --max-instances=1 --port=8080 \
-  --no-traffic --tag=validation --no-allow-unauthenticated --clear-secrets \
+  --no-allow-unauthenticated --clear-secrets \
   --set-env-vars=PLAYGROUND_MAX_CONCURRENT_EXECUTIONS=2,PLAYGROUND_ALLOWED_ORIGINS=https://ferretlang.org,PLAYGROUND_SHUTDOWN_TIMEOUT=4s,PLAYGROUND_CLEANUP_TIMEOUT=3s \
   --startup-probe=httpGet.path=/api/v1/environment,httpGet.port=8080,periodSeconds=2,timeoutSeconds=2,failureThreshold=30
 gcloud run services describe "$cloud_run_service" --project=montferret --region=us-east1 \
   --format=json > /tmp/playground-validation-service.json
-cloud_run_revision=$(jq -er '.status.traffic[] | select(.tag == "validation") | .revisionName' /tmp/playground-validation-service.json)
-cloud_run_url=$(jq -er '.status.traffic[] | select(.tag == "validation") | .url' /tmp/playground-validation-service.json)
+cloud_run_revision=$(jq -er '.status.latestCreatedRevisionName' /tmp/playground-validation-service.json)
 gcloud run revisions describe "$cloud_run_revision" --project=montferret --region=us-east1 \
   --format=json > /tmp/playground-validation-revision.json
 jq -e --arg digest "$cloud_run_digest" '
   (.status.imageDigest | endswith($digest)) and
   any(.status.conditions[]; .type == "Ready" and .status == "True")
 ' /tmp/playground-validation-revision.json
-jq -e --arg revision "$cloud_run_revision" '
-  [.status.traffic[] | select(.revisionName == $revision) | (.percent // 0)] | all(. == 0)
-' /tmp/playground-validation-service.json
+cloud_run_url=$(jq -er '.status.url' /tmp/playground-validation-service.json)
 ```
 
 Inspect the saved revision: exactly one container; gen2 execution; CPU/memory,
@@ -97,13 +100,17 @@ no inherited secret bindings, extra arguments, or isolation overrides. A startup
 failure is a compatibility blocker. The launcher emits fixed codes such as
 `namespace_start_failed`, `namespace_policy_unavailable`, and
 `renderer_sandbox_unavailable`, without raw Chromium output.
+Namespace and interface inspection logs include only a distinct-namespace
+boolean, interface counts, loopback-only booleans and numeric errno. The parent
+namespace descriptor is closed before helper or Chromium startup.
 
 The [tagged revision procedure](https://docs.cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration#deploying_new_tagged_revisions)
-allows authenticated testing without changing the serving revision's traffic.
+is available when a validation service already has a healthy baseline. The first
+revision of the separate service does not use `--no-traffic`.
 
 ## Check authenticated HTTP behavior
 
-Require anonymous invocation to return 401 or 403. Invoke the tagged URL with a
+Require anonymous invocation to return 401 or 403. Invoke the validation URL with a
 short-lived identity token from the approved testing identity, keeping the token
 out of logs. Verify all five endpoints and these minimum acceptance checks:
 
@@ -132,8 +139,8 @@ unset cloud_run_token
 
 ## Observe shutdown and retain evidence
 
-After completing requests, allow the zero-traffic, minimum-zero candidate to
-scale down. Do not direct production traffic to it. Inspect the revision's logs:
+After completing requests, allow the separate minimum-zero candidate to scale
+down. Do not direct production traffic to it. Inspect the revision's logs:
 
 ```sh
 gcloud logging read \
@@ -149,8 +156,42 @@ child failure, reaping and exit below nine seconds. These local results must be
 reported separately from observed Cloud Run results; natural idle scale-down
 does not prove the active-request cancellation case on Cloud Run.
 
+Export the service/revision configuration, invocation policy and logs before
+deleting the temporary validation service. Retain the private immutable candidate
+image reference and local OCI archive as evidence. Do not delete `playground`.
+
 Record every missing or failed live case as a release blocker. Repeat this gate
-when the browser base, namespace/policy launcher, or lifecycle changes. Remove
-the validation tag/revision and private validation image reference only through
-the approved cleanup operation. Production traffic switching, public service
+when the browser base, namespace/policy launcher, or lifecycle changes.
+Production traffic switching, public service
 IAM, registry promotion and the website's Worker-payload migration are separate.
+
+## Observed validation result
+
+On 2026-11-03, authenticated service `playground-validation` was configured for
+gen2, two vCPUs, 2 GiB memory, HTTP concurrency 16, execution capacity two, HTTP
+startup probing, a four-second drain and three-second cleanup. Its runtime
+identity was `playground-runtime@montferret.iam.gserviceaccount.com`, with no
+project role grants. The private OCI archive was copied with digest preservation.
+
+Revision `playground-validation-00001-xgd` ran manifest
+`sha256:15b7a2685c1d67fbdba04a92dc3a90704aa32c2f46eb3adaac4b81278b0ff2fa`,
+using Chromium 156.0.8078.80, Linux/amd64 browser manifest
+`sha256:78c7fd698d088c639bc58221eb36565ce2c93a0b4f5af2cdf77fd3fb741eebf4`.
+The locally verified candidate reported:
+
+```json
+{"distinct":true}
+{"netlinkOK":true,"netlinkErrno":0,"netlinkInterfaceCount":3,"netlinkOnlyLoopback":false,"procfsOK":true,"procfsErrno":0,"procfsInterfaceCount":3,"procfsOnlyLoopback":false}
+{"stage":"network_interface_layout_invalid","errno":0,"exitStatus":0}
+```
+
+The container exited with status 1 and initialization rollback finished in 1 ms.
+Netlink is available; changing the enumeration source would not correct the
+actual layout. The required loopback-only gate remains enforced. There is no
+automatic interface removal, host-network fallback, extra outer capability or
+disabled sandbox.
+
+Nftables, renderer sandbox, steady-state resource usage, authenticated endpoint
+behavior and serving shutdown were not reached on Cloud Run. They remain blocked
+live checks, independently of passing Linux packaged tests. Production service
+`playground` was not changed.
