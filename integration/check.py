@@ -165,10 +165,16 @@ def checks():
     eventually(ready, timeout=60)
     startup = [json.loads(line) for line in api_logs().splitlines()]
     assert any(entry.get("msg") == "Container network namespace inspection" and entry.get("distinct") is True for entry in startup)
-    assert any(entry.get("msg") == "Container network inspection" and entry.get("netlinkOnlyLoopback") is True
-               and entry.get("procfsOnlyLoopback") is True and entry.get("netlinkOK") is True and entry.get("procfsOK") is True for entry in startup)
-    assert {entry.get("stage") for entry in startup if entry.get("msg") == "Container isolation verified"} == {
-        "network_policy", "renderer_sandbox", "browser_connections"}
+    inventory, = [entry for entry in startup if entry.get("msg") == "Container network inspection"]
+    stages = [entry for entry in startup if entry.get("msg") == "Container isolation verified"]
+    assert [entry["stage"] for entry in stages] == [
+        "network_layout", "network_policy", "renderer_sandbox", "browser_connections"]
+    count = stages[0]["inertTunnels"]
+    assert count >= 0
+    for inspector in ("netlink", "procfs"):
+        assert inventory[inspector + "OK"] is True
+        assert inventory[inspector + "InterfaceCount"] == count + 1
+        assert inventory[inspector + "OnlyLoopback"] == (count == 0)
     bindings = json.loads(docker("inspect", "--format", "{{json .NetworkSettings.Ports}}", api))
     assert bindings["8080/tcp"][0]["HostIp"] == "127.0.0.1", bindings
     assert not bindings.get("9223/tcp"), bindings

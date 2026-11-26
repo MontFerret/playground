@@ -206,13 +206,10 @@ scenario with a 30-second execution cap. These are local Linux results.
 Retain the suite's runner and shutdown measurements with the archive and
 `dist/image.json`.
 
-Live gen2 validation on 2026-11-03 failed the loopback-only layout requirement.
-The child namespace differed from its parent, and Netlink and procfs both
-successfully reported three interfaces. The container exited before nftables,
-Chromium or HTTP startup; initialization rollback took 1 ms. This result does
-not justify a procfs-only replacement for interface enumeration. The layout
-gate remains enforced, and the current Cloud Run configuration is a release
-blocker. See [the retained validation record](cloud-run.md#observed-validation-result).
+On November 3 the original loopback-only rule rejected the three-interface
+layout on gen2 before nftables or Chromium started. On November 26 the
+authenticated validation service identified the two inactive tunnel types and
+passed startup with the revised checks. [Cloud Run validation results](cloud-run.md#observed-validation-result)
 
 The website still sends Worker's `{text, params}` payload and reads raw output.
 It must use `/api/v1/execute`, `source.text`, the outcome envelope, and 429
