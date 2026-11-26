@@ -214,3 +214,29 @@ returned all 12 expected rows, including the zero-priced tablet. The service
 denied anonymous invocation and disallowed destinations, enforced CORS, and
 returned 429 while two delayed product requests ran. Both requests completed
 and capacity recovered. This image was an intermediate compatibility build.
+
+The implementation at `e997d8da84cf035dac34e37461f7a5ecc331fe63` passed
+`make check`, `make integration` and `make release-snapshot` on native
+Linux/amd64. The verified snapshot manifest was
+`sha256:735a42a92bbc6bd8d21a178a2a00406315ff627b0f216067dcd2fd0d26cfb94f`.
+Private revision `playground-validation-snapshot-e997d8d` passed the HTTP
+checks above and finished idle shutdown in 42 ms.
+
+The [alpha.5 release workflow](https://github.com/MontFerret/playground/actions/runs/45904894322)
+published the prerelease image at
+`sha256:26eba454e744d89b0182ac902d4d60a7f4b245afd77294e7fe24fccb1d8fe31b`.
+The digest matched the release descriptor, archived OCI manifest and private
+Artifact Registry tag. Authenticated revision `playground-validation-alpha5`
+passed the five API operations, complete product fixture, destination denials,
+CORS, capacity rejection and recovery. Cloud Monitoring recorded a maximum
+sampled CPU utilization of 8.6% and memory utilization of 17.6% with one
+instance. Its logs recorded one startup and idle cleanup in 32 ms.
+
+Production revision `playground-alpha5` became ready with that digest and
+received 100% of service traffic. Anonymous requests to the
+[production environment endpoint](https://playground-811908774949.us-east1.run.app/api/v1/environment)
+reported service `1.0.0-alpha.5`, Ferret `v2.0.0-alpha.62` and HTML
+`v1.0.0-rc.30`. The public execute endpoint returned the 12 expected rows from
+the checked-in products query. Production used the dedicated runtime service
+account and its existing 2 vCPU, 4 GiB, concurrency 80 and maximum-one-instance
+configuration.
