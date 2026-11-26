@@ -114,8 +114,8 @@ Require anonymous invocation to return 401 or 403. Invoke the validation URL wit
 short-lived identity token from the approved testing identity, keeping the token
 out of logs. Verify all five endpoints and these minimum acceptance checks:
 
-- `/environment` reports the intended service version, Ferret alpha.61, HTML
-  rc.24, safe library and execution capacity two. Its successful startup proves
+- `/environment` reports the intended service version, Ferret alpha.62, HTML
+  pinned in `go.mod`, safe library and execution capacity two. Its successful startup proves
   the same artifact passed renderer and browser-namespace bypass probes before
   opening HTTP.
 - Parameterized execution returns complete output; the checked-in product query

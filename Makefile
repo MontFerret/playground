@@ -13,10 +13,10 @@ test:
 	$(GO) test ./...
 
 fmt:
-	gofmt -w $$(find cmd internal api -name '*.go' -type f)
+	gofmt -w $$(find cmd internal api integration -name '*.go' -type f)
 
 fmt-check:
-	@files="$$(gofmt -l $$(find cmd internal api -name '*.go' -type f))"; if [ -n "$$files" ]; then printf '%s\n' "$$files"; exit 1; fi
+	@files="$$(gofmt -l $$(find cmd internal api integration -name '*.go' -type f))"; if [ -n "$$files" ]; then printf '%s\n' "$$files"; exit 1; fi
 
 vet:
 	$(GO) vet ./...

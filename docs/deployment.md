@@ -70,11 +70,10 @@ browser namespace: Chromium connects to its loopback TCP port 3128, and it dials
 permission-protected `egress.sock`, served by the outer proxy. Chromium requires
 a TCP proxy endpoint; the relay lets it use the enforcing proxy without an
 external network interface. `cdp-relay` also runs as UID 10002 in the browser
-namespace. It inherits a listener created on parent loopback port 9222 and dials
-Chromium on browser loopback port 9223. The listening socket retains its parent
-network namespace across inheritance, so the API's pinned HTTP/WebSocket client
-connects directly through this one relay. There is no CDP Unix socket or outer
-control-relay process. Only the API port is published.
+namespace. It inherits a listener on parent loopback port 9223 and dials
+Chromium on browser loopback port 9223. The upstream HTML driver can follow
+Chromium's advertised debugger URL through the transparent relay. Only the
+API port is published.
 
 Readiness checks actual renderer UIDs, nested PID namespaces and additional
 seccomp filters. It also executes direct-connection and Unix-socket bypass
@@ -116,16 +115,21 @@ python3 -c 'import json,pathlib; print(json.dumps({"source":{"text":pathlib.Path
     -H 'Content-Type: application/json' --data-binary @-
 ```
 
-The public product FQL is unchanged. Initial navigation subscribes to lifecycle
-events before navigating, avoiding the pinned HTML module's fast-page race.
-Only upstream DOCUMENT is registered. DOWNLOAD and PARSE remain unavailable.
-Request options cannot select a shared profile, cookies, arbitrary headers,
-init scripts, user agents, or another driver. Each execution lazily creates a
-fresh disposable browser context; its pages, popups and state are removed
-before its execution slot is released.
+The product query uses `DOCUMENT(url)`. The host accepts one HTTPS Mockery URL
+and delegates to the execution's default CDP driver. Each call opens an
+independent browser context, including successive calls in the same query.
+The native driver owns the pages, popups and cleanup. Only DOCUMENT is
+registered. Its single argument keeps cookies, init scripts and driver options
+under host control.
 
-Pins remain Go 1.27, Ferret `v2.0.0-alpha.61`, Universal API
-`v1.0.0-alpha.21`, and HTML `v1.0.0-rc.24`. The browser is MontFerret Chrome
+Each active driver's origin policy applies to HTTP(S) traffic across the
+dedicated Chromium endpoint. All executions use the same policy. WebSocket
+handshakes fall outside CDP Fetch interception. The namespace and
+destination-restricted CONNECT proxy enforce the network boundary throughout
+driver startup and teardown.
+
+The service uses Go 1.27, Ferret `v2.0.0-alpha.62`, Universal API
+`v1.0.0-alpha.21`, and the HTML version pinned in `go.mod`. The browser is MontFerret Chrome
 156.0.8078.80, Linux/amd64 manifest
 `sha256:78c7fd698d088c639bc58221eb36565ce2c93a0b4f5af2cdf77fd3fb741eebf4`.
 The local seccomp profile derives from [Playwright v1.55.0](https://github.com/microsoft/playwright/blob/v1.55.0/utils/docker/seccomp_profile.json),
@@ -137,8 +141,12 @@ with chroot permitted for the nested user namespace.
 its OCI archive and runs the same suite with API builds disabled. Both remove
 containers, anonymous volumes and test networks on every exit. A separate
 private TLS fixture uses JavaScript-rendered cards, explicit hold/release
-signals, storage probes and reachable forbidden-request canaries. It routes the
-Mockery hostname only inside the test container and trusts one ephemeral SPKI.
+signals, storage probes and reachable forbidden-request canaries. The suite
+routes the Mockery hostname only inside the test container and trusts one
+ephemeral SPKI. A test-only CDP observer checks target and context IDs through
+the private relay. The suite sets a 60-second execution cap so two held Chromium
+pages can initialize on emulated runners. It separately enforces a shorter
+request deadline and the packaged shutdown budgets.
 After caching images, `PLAYGROUND_USE_CACHED_IMAGES=1 make integration` skips
 builds and pulls. No public fixture website or cloud credentials are needed.
 
@@ -154,9 +162,16 @@ draining request and 6.866 seconds with forced cancellation. Namespace-denial
 rollback, browser/relay failure, reaping and all HTTP/browser assertions passed.
 The tested unified OCI manifest is
 `sha256:4e74bf4f0e59e4dff25dac12659a4546df294afdbed351f53db210952b3afbb5`.
-This is local snapshot evidence, without registry publication or Cloud Run
-validation. The suite prints runner resources and shutdown measurements on
-every passing run; retain that output with the archive and `dist/image.json`.
+
+The 2026-11-17 native-driver development image and imported release snapshot
+both passed on Ubuntu 24.04.5 x86_64 under QEMU. The development container
+drained in 3.48 seconds and exited after forced cancellation in 7.43 seconds.
+The verified snapshot manifest digest was
+`sha256:22367cfee4f2a76ea460381d019b5404be5ad25e656485132d25553f52bfb13e`.
+The development image also extracted all 12 products from the public Mockery
+scenario with a 30-second execution cap. These are local Linux results.
+Retain the suite's runner and shutdown measurements with the archive and
+`dist/image.json`.
 
 Live gen2 validation on 2026-11-03 failed the loopback-only layout requirement.
 The child namespace differed from its parent, and Netlink and procfs both

@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"time"
 
+	"github.com/MontFerret/contrib/modules/web/html/drivers"
 	ferretjson "github.com/MontFerret/ferret/v2/pkg/encoding/json"
 	"github.com/MontFerret/ferret/v2/pkg/engine"
 	"github.com/MontFerret/ferret/v2/pkg/runtime"
@@ -33,7 +35,21 @@ func (h *Host) Execute(ctx context.Context, src playground.Source, options playg
 	if err := h.admit(); err != nil {
 		return result, err
 	}
-	defer h.active.Done()
+	var settleBrowser func()
+	defer func() {
+		if settleBrowser == nil {
+			h.active.Done()
+
+			return
+		}
+
+		// On terminal shutdown the host still owns this admission until the
+		// canceled browser worker has settled.
+		go func() {
+			defer h.active.Done()
+			settleBrowser()
+		}()
+	}()
 
 	var cleanupErr error
 	closeOwned := func(child io.Closer) {
@@ -54,6 +70,9 @@ func (h *Host) Execute(ctx context.Context, src playground.Source, options playg
 		}
 
 		if cleanupErr != nil {
+			// HTTP preserves an earlier program outcome, so record the cleanup
+			// failure separately. Native errors may contain caller data.
+			slog.Error("Execution resource cleanup failed")
 			if err == nil {
 				err = playground.ErrInternal
 			}
@@ -105,11 +124,32 @@ func (h *Host) Execute(ctx context.Context, src playground.Source, options playg
 	}
 
 	executing := time.Now()
-	if h.browser != nil {
-		browserCtx, run := h.browser.Execution(ctx)
-		ctx = browserCtx
-		defer closeOwned(run)
+	if h.cdpOrigin != "" {
+		driver := newBrowserDriver(h.cdpOrigin)
+		defer func() {
+			ctx, cancel := h.browserCleanupContext()
+			defer cancel()
+
+			closeErr := driver.CloseContext(ctx)
+			if closeErr != nil {
+				cleanupErr = errors.Join(cleanupErr, closeErr, context.Cause(ctx))
+				h.failBrowser()
+
+				if ctx.Err() != nil {
+					settleBrowser = func() { _ = driver.CloseContext(context.Background()) }
+				}
+			}
+		}()
+
+		container := drivers.NewContainer()
+		if err := container.Register(driver); err != nil {
+			return result, err
+		}
+
+		container.SetDefault(driver.Name())
+		ctx = container.WithContext(ctx)
 	}
+
 	session, err := plan.NewSession(ctx, engine.WithSessionRuntimeParams(params), engine.WithOutputContentType(ferretjson.ContentType))
 	if session != nil {
 		defer closeOwned(session)

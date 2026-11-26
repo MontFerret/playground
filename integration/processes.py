@@ -45,12 +45,23 @@ def host_operation(container, operation, **fields):
     return json.loads(result)
 
 
-def discover(container):
+def snapshot(container):
     pids = subprocess.check_output(["docker", "top", container, "-eo", "pid"], text=True).split()[1:]
-    records = host_operation(container, "snapshot", pids=pids)
+    return [decode(value) for value in host_operation(container, "snapshot", pids=pids)]
+
+
+def assert_reaped(processes):
+    for process in processes:
+        try:
+            stat = (Path("/proc") / process.pid / "stat").read_text().rsplit(") ", 1)[1].split()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        assert stat[19] != process.started, f"container process {process.pid} survived shutdown"
+
+
+def discover(container):
     roles = {}
-    for value in records:
-        process = decode(value)
+    for process in snapshot(container):
         args = process.arguments
         if args == ("/usr/bin/playground", "container"):
             role = "supervisor"

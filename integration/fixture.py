@@ -33,7 +33,7 @@ class Handler(BaseHTTPRequestHandler):
             action, _, token = path.strip("/").partition("/")
             with changed:
                 if action == "wait":
-                    observed = changed.wait_for(lambda: events[token] > 0, 12)
+                    observed = changed.wait_for(lambda: events[token] > 0, 45)
                     self.reply("observed" if observed else "timeout", 200 if observed else 408)
                 elif action == "release":
                     released.add(token)
@@ -50,13 +50,22 @@ class Handler(BaseHTTPRequestHandler):
                 changed.notify_all()
             self.reply("canary")
             return
+        if path == "/socket" and self.headers.get("Upgrade", "").lower() == "websocket":
+            with changed:
+                events["allowed-socket"] += 1
+            self.reply("handshake observed", 403)
+            return
         if path.startswith("/hold/"):
             token = path.rsplit("/", 1)[1]
             with changed:
                 events[token] += 1
                 changed.notify_all()
-                changed.wait_for(lambda: token in released, 35)
+                changed.wait_for(lambda: token in released, 70)
             self.reply("<p>released</p>")
+        elif path == "/fast":
+            with changed:
+                events["fast"] += 1
+            self.reply('<p id="state">ready</p>')
         elif path == "/scenarios/dynamic-products/basic/":
             self.reply("""<main></main><script>
               fetch('/cards.json').then(r=>r.json()).then(cards=>{for(const c of cards){
@@ -83,6 +92,31 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", forbidden + "/redirect-target")
             self.end_headers()
+        elif path.startswith("/session/"):
+            token = json.dumps(path.rsplit("/", 1)[1])
+            self.reply('<p id="state"></p><script>const token='+token+""";
+                document.cookie='run='+token+'; Secure; Path=/';localStorage.run=token;
+                const state=document.querySelector('#state');
+                // FQL signals from the loaded page before waiting for its final value.
+                const observer=new MutationObserver(()=>{
+                  observer.disconnect();
+                  fetch('/hold/'+token).then(()=>{
+                    state.textContent=JSON.stringify([document.cookie,localStorage.run]);
+                  });
+                });
+                observer.observe(state,{childList:true});
+                </script>""")
+        elif path == "/sockets":
+            self.reply("""<p id="state"></p><script>
+                function handshake(host) {
+                  return new Promise(resolve => {
+                    const ws=new WebSocket('wss://'+host+'/socket');
+                    ws.onopen=()=>{ws.close();resolve('opened')};ws.onerror=()=>resolve('closed');
+                  });
+                }
+                Promise.all([handshake(location.host),handshake('forbidden.test')]).then(outcomes=>{
+                  document.querySelector('#state').textContent=JSON.stringify(outcomes);
+                });</script>""")
         elif path == "/subresource":
             self.reply('<p id="state"></p><script>fetch("'+forbidden+
                        '/subresource-target",{mode:"no-cors"}).then(()=>finish("reached"),()=>finish("blocked"));'

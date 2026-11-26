@@ -42,7 +42,24 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return fmt.Errorf("initialize runtime: %w", err)
 	}
 
-	return serve(ctx, cfg, host, serviceIdentity(), logger)
+	serving, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-host.BrowserFailed():
+			cancel()
+		case <-serving.Done():
+		}
+	}()
+
+	err = serve(serving, cfg, host, serviceIdentity(), logger)
+	select {
+	case <-host.BrowserFailed():
+		return errors.Join(err, errors.New("browser cleanup could not be confirmed"))
+	default:
+		return err
+	}
 }
 
 // serve takes ownership of host, including on listener startup failure.

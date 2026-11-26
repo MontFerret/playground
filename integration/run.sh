@@ -34,6 +34,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=mockery.ferretlang.o
   -keyout "$FIXTURE_TLS/key.pem" -out "$FIXTURE_TLS/cert.pem" 2>/dev/null
 chmod 755 "$FIXTURE_TLS"
 chmod 444 "$FIXTURE_TLS/key.pem" "$FIXTURE_TLS/cert.pem"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$FIXTURE_TLS/browser-state" ./integration/browserstate
 spki=$(openssl x509 -in "$FIXTURE_TLS/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl base64 -A)
 image=${PLAYGROUND_API_IMAGE:-playground-api:local}
 if [[ "${PLAYGROUND_USE_CACHED_IMAGES:-0}" != 1 ]]; then
@@ -90,6 +91,7 @@ docker run --detach --pull never --platform linux/amd64 --name "$PLAYGROUND_FIXT
 bash deploy/container/run.sh "$image" "$PLAYGROUND_API_CONTAINER" 0 \
   --network "$project-front" --network "$project" --add-host mockery.ferretlang.org:185.199.108.153 \
   --add-host forbidden.test:185.199.108.153 \
+  --volume "$FIXTURE_TLS/browser-state:/usr/local/bin/browser-state:ro" \
   --env "PLAYGROUND_FIXTURE_SPKI=$spki" \
-  --env PLAYGROUND_MAX_EXECUTION_TIMEOUT=30s --env PLAYGROUND_WRITE_TIMEOUT=35s >/dev/null
+  --env PLAYGROUND_MAX_EXECUTION_TIMEOUT=60s --env PLAYGROUND_WRITE_TIMEOUT=65s >/dev/null
 python3 -B integration/check.py

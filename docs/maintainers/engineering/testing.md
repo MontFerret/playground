@@ -89,7 +89,8 @@ root access (or noninteractive `sudo`) for host procfs inspection. Container pri
 The suite has a separate test-only TLS fixture container. It exercises namespace
 denial through the normal release entrypoint, startup connection probes from the
 actual browser namespace, essential-child failure using test-side process discovery,
-and whole-container shutdown under nine seconds. Local Docker success is separate from the mandatory real Cloud Run
+and whole-container shutdown, including the supervisor’s 8.5-second budget and
+reaping of the browser process tree. Local Docker success is separate from the mandatory real Cloud Run
 compatibility checks in [Cloud Run validation](../../cloud-run.md).
 Separate packaged cases deny NETLINK_ROUTE and NETLINK_NETFILTER sockets and
 require the ordinary entry point to exit without opening HTTP. Route denial

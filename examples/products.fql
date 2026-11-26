@@ -1,8 +1,5 @@
-// Open the the product listing page using a browser-based driver (CDP)
-// This allows Ferret to execute JavaScript and work with dynamic content
-let doc = DOCUMENT('https://mockery.ferretlang.org/scenarios/dynamic-products/basic/', {
-    driver: 'cdp'
-})
+// The hosted browser runs the product listing's JavaScript.
+let doc = DOCUMENT('https://mockery.ferretlang.org/scenarios/dynamic-products/basic/')
 
 // Wait until at least one product card is present on the page
 // This is important because the page loads content asynchronously

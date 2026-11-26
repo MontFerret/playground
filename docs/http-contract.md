@@ -81,7 +81,7 @@ Both operations use the initialized native engine's compilation path and never
 create sessions or execute FQL. Analysis uses full optimization. It checks
 parsing, lexical bindings, and the semantic checks provided by native compilation.
 Host-function resolution and parameter binding remain runtime concerns in
-alpha.61. Unknown host functions and unbound parameters can compile successfully.
+alpha.62. Unknown host functions and unbound parameters can compile successfully.
 The playground supplies no additional resolver and makes no runtime-success claim.
 
 Compilation maps `none`, `basic`, and `full` explicitly to native per-plan
@@ -125,7 +125,7 @@ between writes are synchronous, and the byte limit applies only to emitted text.
 
 Native structured diagnostic kinds determine source rejection versus internal
 failure. Syntax errors use phase `parse`; semantic/name/type/unsupported-source
-errors use `compile` consistently across tooling adapters. Alpha.61 exposes errors, without a warning
+errors use `compile` consistently across tooling adapters. Alpha.62 exposes errors, without a warning
 severity channel or stable diagnostic codes. The adapter invents neither.
 Messages and hints are copied without parsing rendered terminal errors. Ordering
 follows the upstream error tree; the main span is preferred, otherwise the first

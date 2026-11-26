@@ -130,7 +130,7 @@ func runContainer(ctx context.Context) (result error) {
 	}
 	_ = egress.Close()
 
-	control, err := tcpListener(9222)
+	control, err := tcpListener(9223)
 	if err != nil {
 		return errors.New("control_listener_failed")
 	}
@@ -309,7 +309,7 @@ func containerEnvironment() []string {
 		}
 	}
 
-	for name, value := range map[string]string{"PLAYGROUND_CDP_ORIGIN": "http://127.0.0.1:9222", "PLAYGROUND_SHUTDOWN_TIMEOUT": "4s", "PLAYGROUND_CLEANUP_TIMEOUT": "3s"} {
+	for name, value := range map[string]string{"PLAYGROUND_CDP_ORIGIN": "http://127.0.0.1:9223", "PLAYGROUND_SHUTDOWN_TIMEOUT": "4s", "PLAYGROUND_CLEANUP_TIMEOUT": "3s"} {
 		if _, ok := os.LookupEnv(name); !ok || name == "PLAYGROUND_CDP_ORIGIN" {
 			env = append(env, name+"="+value)
 		}

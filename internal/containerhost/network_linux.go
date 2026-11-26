@@ -17,7 +17,7 @@ func networkCheck(ctx context.Context) error {
 	}
 
 	dialer := &net.Dialer{Timeout: time.Second}
-	for _, address := range []string{"127.0.0.1:9222", "127.0.0.1:9223", "127.0.0.1:8080", "169.254.169.254:80", "1.1.1.1:443", "[::1]:9223"} {
+	for _, address := range []string{"127.0.0.1:9223", "127.0.0.1:8080", "169.254.169.254:80", "1.1.1.1:443", "[::1]:9223"} {
 		conn, err := dialer.DialContext(ctx, "tcp", address)
 		if err == nil {
 			_ = conn.Close()

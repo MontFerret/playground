@@ -60,7 +60,7 @@ paths:
                 service: {name: ferret-playground, version: null}
                 runtime:
                   name: ferret
-                  version: v2.0.0-alpha.61
+                  version: v2.0.0-alpha.62
                   standardLibrary: safe
                   modules: []
                 capabilities:

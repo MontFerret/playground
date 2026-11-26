@@ -7,6 +7,7 @@ import (
 	"io"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/MontFerret/ferret/v2"
 	"github.com/MontFerret/ferret/v2/pkg/formatter"
@@ -14,23 +15,28 @@ import (
 	ferretnet "github.com/MontFerret/ferret/v2/pkg/net"
 	"github.com/MontFerret/ferret/v2/pkg/stdlib"
 
-	"github.com/MontFerret/playground/internal/browser"
 	"github.com/MontFerret/playground/internal/playground"
 )
 
 type (
 	// Host owns its engine. Close it after all users of the host have settled.
 	Host struct {
-		browser     *browser.Browser
-		engine      *ferret.Engine
-		formatter   *formatter.Formatter
-		description playground.Runtime
-		closeOnce   sync.Once
-		closeDone   chan struct{}
-		closeErr    error
-		admission   sync.Mutex
-		closing     bool
-		active      sync.WaitGroup
+		cdpOrigin             string
+		browserCleanup        time.Duration
+		browserDeadline       time.Time
+		browserShutdown       context.Context
+		cancelBrowserShutdown context.CancelCauseFunc
+		browserFailed         chan struct{}
+		browserFailureOnce    sync.Once
+		engine                *ferret.Engine
+		formatter             *formatter.Formatter
+		description           playground.Runtime
+		closeOnce             sync.Once
+		closeDone             chan struct{}
+		closeErr              error
+		admission             sync.Mutex
+		closing               bool
+		active                sync.WaitGroup
 	}
 
 	registration struct {
@@ -87,10 +93,12 @@ func (h *Host) Close(ctx context.Context) error {
 	h.closeOnce.Do(func() {
 		h.admission.Lock()
 		h.closing = true
+		stopBrowser := h.limitBrowserShutdown(ctx)
 		h.admission.Unlock()
 
 		go func() {
 			h.active.Wait()
+			stopBrowser()
 			h.closeErr = h.engine.Close()
 			close(h.closeDone)
 		}()
@@ -135,9 +143,14 @@ func newHost(registrations []registration, info *debug.BuildInfo) (*Host, error)
 		return nil, err
 	}
 
+	browserShutdown, cancelBrowserShutdown := context.WithCancelCause(context.Background())
+
 	return &Host{
-		engine:    engine,
-		formatter: fmt,
+		browserShutdown:       browserShutdown,
+		cancelBrowserShutdown: cancelBrowserShutdown,
+		browserFailed:         make(chan struct{}),
+		engine:                engine,
+		formatter:             fmt,
 		description: playground.Runtime{
 			Name: "ferret", Version: dependencyVersion(info),
 			StandardLibrary: "safe", Modules: metadata,

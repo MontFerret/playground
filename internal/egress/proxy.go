@@ -10,21 +10,22 @@ import (
 	"time"
 )
 
+// MockeryHost is the sole destination for hosted HTML and browser egress.
+const MockeryHost = "mockery.ferretlang.org"
+
 // Handler permits only CONNECT to the public Mockery HTTPS origin.
 func Handler() http.Handler {
 	return http.HandlerFunc(tunnel)
 }
 
-const demoHost = "mockery.ferretlang.org"
-
 func tunnel(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodConnect || r.RequestURI != demoHost+":443" || r.Host != r.RequestURI {
+	if r.Method != http.MethodConnect || r.RequestURI != MockeryHost+":443" || r.Host != r.RequestURI {
 		http.Error(w, "denied", http.StatusForbidden)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", demoHost)
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", MockeryHost)
 	if err != nil || len(ips) == 0 {
 		http.Error(w, "unavailable", 502)
 		return

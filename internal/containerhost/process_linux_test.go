@@ -85,7 +85,7 @@ func TestContainerEnvironmentOwnsControlAndFiltersCredentials(t *testing.T) {
 		t.Fatal("container inherited a credential or external control origin")
 	}
 
-	if !strings.Contains(env, "PLAYGROUND_CDP_ORIGIN=http://127.0.0.1:9222") ||
+	if !strings.Contains(env, "PLAYGROUND_CDP_ORIGIN=http://127.0.0.1:9223") ||
 		!strings.Contains(env, "PLAYGROUND_ALLOWED_ORIGINS=https://ferretlang.org") {
 		t.Fatal("container lost its enforced control endpoint or operator CORS setting")
 	}
