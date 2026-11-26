@@ -65,7 +65,7 @@ the same validated settings used for enforcement.
 Analysis and compilation share one Engine.Compile path against the initialized
 host. Analysis uses full optimization and renders no artifacts. Compilation uses
 explicit native per-plan options. The compiler does not bind host functions or
-parameter values in alpha.61.
+parameter values in alpha.62.
 Analysis and compilation both finish without creating a session.
 
 The temporary plan owns the compiled program. Parameter metadata uses Plan.Params
@@ -114,7 +114,7 @@ preserves the primary failure and never delivers partial output.
 Release the output before closing its session, then close the plan before
 releasing admission. A canceled Consume can leave the handle unclaimed, so the
 owner calls Close even after rejected admission. The shared engine outlives all
-of these descendants. Alpha.61 eagerly materializes the encoded VM result in
+of these descendants. Alpha.62 eagerly materializes the encoded VM result in
 Session.Run. Consumer limits bound delivery bytes, while upstream encoding and
 VM allocations depend on the program.
 
@@ -146,7 +146,7 @@ settled.
 
 ## Upstream integration gaps
 
-Verified against Ferret `v2.0.0-alpha.61` and API `v1.0.0-alpha.21`.
+Verified against Ferret `v2.0.0-alpha.62` and API `v1.0.0-alpha.21`.
 
 - Native `Engine` has no release-version query. UAPI `New`/`Wrap` require the host
   to supply the opaque Core version. Dependency build metadata is the source
@@ -176,20 +176,38 @@ WASM adapter.
 
 ## Hosted browser
 
-The runtime host borrows the container launcher's private CDP service. Each execution lazily owns a
-browser context and a separate owner connection with dispose-on-detach enabled.
-Page managers own separate CDP connections, so closing one page preserves its
-siblings. After output and native session cleanup, the browser execution closes
-pages and disposes its context, including popup targets. A fresh cleanup deadline
-disconnects page transports to bound upstream background CDP calls. Host work
-remains admitted through this cleanup. The HTTP slot wraps the entire operation.
+Hosted startup verifies discovery and connects to the advertised WebSocket
+through the private relay, then closes the probe before constructing the engine. Each execution
+then owns a native driver in its own `drivers.Container`. The first DOCUMENT
+call establishes the upstream browser-wide HTTP(S) policy. All drivers use the
+same fixed origin. Each call opens an independent disposable browser context.
+The driver owns page cleanup through native result and session settlement.
+The host then closes the driver under one configured cleanup deadline. It
+disposes page contexts concurrently and closes their owner connections.
+Disposal is confirmed by Chromium's acknowledgement or by observing that the
+context is absent. An unresolved cleanup failure stops host admission and
+triggers serving shutdown. The host retains admission until cleanup has
+settled, even if the request has already returned a sanitized failure.
 
-The module registers upstream DOCUMENT only. A run-local driver container carries
-the owned browser execution. Host policy rejects cookie reuse, parse, arbitrary
-drivers and document host settings. The launcher owns a new user/network namespace
+During host shutdown, active and subsequent browser cleanup is capped at the
+midpoint of the remaining host cleanup budget. The rest of the budget is
+available for settling admitted work and closing the engine. HTTP supplies
+the execution deadline to DOCUMENT for navigation.
+
+The unary DOCUMENT function checks the submitted URL against the proxy's
+Mockery hostname and delegates to `lib.Open` using the default driver.
+Container egress controls also cover traffic outside CDP Fetch, including
+WebSockets. The launcher owns a new user/network namespace
 with only loopback. UID rules are installed inside that namespace before Chromium
-starts. Permission-protected Unix sockets bridge the trusted proxy and CDP relay
-to the parent namespace. There is no outer NET_ADMIN or SYS_ADMIN requirement.
+starts. A permission-protected Unix socket bridges the trusted proxy to the
+parent namespace. The CDP relay inherits a parent-loopback TCP listener and
+connects to browser loopback on the same port (9223).
+There is no outer NET_ADMIN or SYS_ADMIN requirement.
+An inherited parent namespace descriptor lets the child verify a distinct
+network namespace by device/inode identity. That descriptor closes before
+helpers start and is protected against exec inheritance. Netlink interface
+enumeration remains required; bounded procfs inspection provides an independent
+diagnostic view. Additional interfaces are rejected rather than hidden or removed.
 API/proxy workers use UID 65532, Chromium UID 10001, and trusted namespace relays
 UID 10002. Namespace bootstrap root maps to outer UID 65530. The outer root
 supervisor owns identity setup and child termination; it serves no public HTTP.
@@ -199,11 +217,12 @@ the browser UID in the real namespace before starting HTTP. On termination it
 signals the API first, preserves the browser through native cleanup, and then
 stops the remaining process groups under one fresh 8.5-second budget. Tini reaps
 orphaned descendants. The profile disappears with ephemeral container storage.
-Unexpected essential-child exit follows the same bounded shutdown path.
+Each essential child has one Wait owner. Startup and serving observe its retained
+completion channel directly; the one-shot browser-UID probe has separate startup
+ownership. The filtered environment is built once by the supervisor. Unexpected
+essential-child exit reports a fixed role code with numeric status. If the
+proxy or namespace worker exits during serving, the supervisor stops the API
+immediately so admitted work cannot return success during a graceful drain.
+Normal SIGTERM retains the API drain and cleanup allowance. Both paths share
+the shutdown budget and reserve time for forced termination and reaping.
 See [deployment enforcement](../deployment.md).
-
-The pinned HTML module starts its navigation subscription after Page.navigate,
-which can miss completion on fast local pages. The host's initial page setup
-subscribes to lifecycle events first, navigates once, and matches the committed
-loader's load event before handing the existing document to the upstream loader.
-This avoids replaying a navigation or changing module/language semantics.

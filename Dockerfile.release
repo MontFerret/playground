@@ -1,4 +1,4 @@
-FROM ghcr.io/montferret/chromium:156.0.8078.80
+FROM ghcr.io/montferret/chromium@sha256:78c7fd698d088c639bc58221eb36565ce2c93a0b4f5af2cdf77fd3fb741eebf4
 USER 0:0
 LABEL org.opencontainers.image.source="https://github.com/MontFerret/playground" \
       org.opencontainers.image.title="Ferret Playground API" \

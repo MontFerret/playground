@@ -4,10 +4,11 @@ go 1.27.0
 
 require (
 	github.com/MontFerret/api v1.0.0-alpha.21
-	github.com/MontFerret/contrib/modules/web/html v1.0.0-rc.24
-	github.com/MontFerret/ferret/v2 v2.0.0-alpha.61
+	github.com/MontFerret/contrib/modules/web/html v1.0.0-rc.30
+	github.com/MontFerret/ferret/v2 v2.0.0-alpha.62
 	github.com/getkin/kin-openapi v0.152.0
 	github.com/mafredri/cdp v0.35.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
 )
 
@@ -20,6 +21,7 @@ require (
 	github.com/goccy/go-json v0.12.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mattn/go-colorable v0.1.16 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/oasdiff/yaml v0.1.3 // indirect

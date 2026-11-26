@@ -83,9 +83,24 @@ go test ./internal/runtimehost -run '^$' -bench '^BenchmarkFragmentedOutput$' -b
 `make release-snapshot` builds and imports the GoReleaser OCI archive before
 running that same suite. Both require native Linux/amd64 and a working
 unprivileged Chromium sandbox. See [deployment guidance](../../deployment.md).
-These targets are separate from fast Go tests.
-The suite has a separate test-only TLS fixture container. It exercises namespace
-denial during partial initialization, direct connections from the actual browser
-namespace, essential-child failure, and whole-container shutdown under nine
-seconds. Local Docker success is separate from the mandatory real Cloud Run
-compatibility checks in [Cloud Run validation](../../cloud-run.md).
+These targets are separate from fast Go tests. Process inspection and failure
+injection require a local Linux Docker daemon, Python with pidfd support,
+`nsenter`, iproute2, and root or noninteractive `sudo` for host procfs inspection.
+Chromium may give a renderer its own network namespace. The host observer checks
+its interfaces and both families of routing tables independently of PID depth.
+
+The packaged suite already checked three startup faults, Mockery extraction,
+one denied WebSocket destination, all essential-child exits, and reaping on
+SIGTERM. Its additional checks use reachable canaries for network and socket
+denial, a controlled resolver for numeric proxy dialing, and live procfs for
+renderer verification and reaping after essential-child failure. It also
+exercises control-listener, renderer and mandatory-probe startup failures.
+The proxy-loss test releases an already-loaded page after admission closes.
+The healthy control must return the result, and the dependency-loss case must
+exit without successful output. Retain the 8.5-second supervisor limit in both
+shutdown paths.
+
+Run the same cases against the imported OCI image. Report runner limitations
+and any browser requests blocked before network dispatch as such. The packaged
+results apply to the tested Linux host. The independent Cloud Run gate is
+described in [Cloud Run validation](../../cloud-run.md).

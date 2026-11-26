@@ -19,6 +19,8 @@ covers host prerequisites, resource limits, browser ownership, and the product d
 [Release setup and recovery](docs/releasing.md) covers the two registries.
 [Cloud Run validation](docs/cloud-run.md) covers the required second-generation
 compatibility gate before release or production cutover.
+Current live validation fails the loopback-only namespace requirement: both
+interface inspectors report three interfaces. Startup remains closed.
 
 ```sh
 make integration       # private fixtures, actual development API image
@@ -29,7 +31,7 @@ make down
 ## Run locally
 
 Requires Go 1.27 or newer and Make. Dependencies are pinned to Ferret
-`v2.0.0-alpha.61` and Universal API `v1.0.0-alpha.21`. The service minimum is owned by go.mod.
+`v2.0.0-alpha.62` and Universal API `v1.0.0-alpha.21`. The service minimum is owned by go.mod.
 There is no browser, credential, Node.js, or external service requirement.
 
 ```sh
@@ -53,7 +55,7 @@ Example response when service build-version metadata is unavailable:
   "service": {"name": "ferret-playground", "version": null},
   "runtime": {
     "name": "ferret",
-    "version": "v2.0.0-alpha.61",
+    "version": "v2.0.0-alpha.62",
     "standardLibrary": "safe",
     "modules": []
   },
@@ -88,7 +90,10 @@ Example response when service build-version metadata is unavailable:
 The service constructs a real native engine with `stdlib.Safe()`, which excludes
 filesystem and network standard-library groups. Browser-free startup registers
 no optional modules. The packaged deployment registers the restricted HTML
-surface described in [deployment guidance](docs/deployment.md). Environment
+surface described in [deployment guidance](docs/deployment.md). Its only HTML
+function is `DOCUMENT(url)`. It opens the HTTPS Mockery origin in a fresh
+browser context on every call. Cookies and local storage are private to that
+page, including when a query opens multiple pages. Environment
 requests read detached metadata; they do not evaluate
 FQL, launch browsers, or make external requests. The standard-library profile
 controls function availability. Execution shares the service process.
@@ -266,7 +271,7 @@ Failed and invalid responses omit `output`.
 
 The earliest request, server, or client deadline applies through output
 consumption. Native compiler phases, host functions that ignore cancellation,
-and synchronous cleanup can delay completion. Ferret alpha.61 materializes
+and synchronous cleanup can delay completion. Ferret alpha.62 materializes
 encoded output during the run. The result limit bounds bytes retained for
 delivery. VM memory and native encoder allocations can exceed that limit.
 

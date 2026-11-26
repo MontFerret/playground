@@ -27,8 +27,6 @@ func main() {
 		if err != nil {
 			// Container roles return fixed codes, never raw child diagnostics.
 			logger.Error("Container stopped", "code", err.Error())
-		} else if mode == "probe" {
-			logger.Info("Container isolation probe passed")
 		}
 	} else {
 		err = run(ctx, logger)

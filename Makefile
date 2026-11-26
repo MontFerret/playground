@@ -13,10 +13,10 @@ test:
 	$(GO) test ./...
 
 fmt:
-	gofmt -w $$(find cmd internal api -name '*.go' -type f)
+	gofmt -w $$(find cmd internal api integration -name '*.go' -type f)
 
 fmt-check:
-	@files="$$(gofmt -l $$(find cmd internal api -name '*.go' -type f))"; if [ -n "$$files" ]; then printf '%s\n' "$$files"; exit 1; fi
+	@files="$$(gofmt -l $$(find cmd internal api integration -name '*.go' -type f))"; if [ -n "$$files" ]; then printf '%s\n' "$$files"; exit 1; fi
 
 vet:
 	$(GO) vet ./...
@@ -40,6 +40,7 @@ integration:
 	bash integration/run.sh
 
 release-snapshot:
+	bash integration/run.sh --check-host
 	python3 scripts/release/test_publish.py
 	python3 scripts/release/test_goreleaser.py
 	goreleaser check
