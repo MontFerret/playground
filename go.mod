@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/MontFerret/api v1.0.0-alpha.21
-	github.com/MontFerret/contrib/modules/web/html v1.0.0-rc.29.0.20261126170150-290490915d3f
+	github.com/MontFerret/contrib/modules/web/html v1.0.0-rc.30
 	github.com/MontFerret/ferret/v2 v2.0.0-alpha.62
 	github.com/getkin/kin-openapi v0.152.0
 	github.com/mafredri/cdp v0.35.0

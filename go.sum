@@ -1,7 +1,7 @@
 github.com/MontFerret/api v1.0.0-alpha.21 h1:gEdhL2JdVAPTkc5bmoPp4nev2rrQDl6qztY/1JQ4a7w=
 github.com/MontFerret/api v1.0.0-alpha.21/go.mod h1:wz5bfUIGYkED8Hqz9CdsW0o2jSgagotbVLOCbHHacSI=
-github.com/MontFerret/contrib/modules/web/html v1.0.0-rc.29.0.20261126170150-290490915d3f h1:Hh4PEQA85ZxM09ZC3jddt8hmeP4cc9FeW82a+FYCLwg=
-github.com/MontFerret/contrib/modules/web/html v1.0.0-rc.29.0.20261126170150-290490915d3f/go.mod h1:rVKmZ2d+nNM2yrCeZ6cyS1jkWytNtIx55qjy7CXhdfE=
+github.com/MontFerret/contrib/modules/web/html v1.0.0-rc.30 h1:CNws3O6EBVRKPW9ea1Hh4HCHRjRb8svaVVTSVeimwPY=
+github.com/MontFerret/contrib/modules/web/html v1.0.0-rc.30/go.mod h1:rVKmZ2d+nNM2yrCeZ6cyS1jkWytNtIx55qjy7CXhdfE=
 github.com/MontFerret/cssx v0.2.0 h1:De0C6Irbg+qgFPXgWmPpVnwD4RRYUBQSbIYFTUVCNWU=
 github.com/MontFerret/cssx v0.2.0/go.mod h1:fmGtRUNVaeJYpiPSDlNIbbYzb3+K8NxmNmJOYqlHATU=
 github.com/MontFerret/ferret/v2 v2.0.0-alpha.62 h1:tDkYxxlk4kvNOVlunAREy87f1+5Pxtn1sTQWyG5aDWE=
