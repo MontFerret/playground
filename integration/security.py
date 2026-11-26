@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fixture import approved_ip, private_ip, private_ipv6
-from processes import discover, namespace_probe, snapshot
+from processes import discover, namespace_probe, renderer_network, snapshot
 
 
 def read_probe(command, requests=None):
@@ -29,7 +29,7 @@ def status(result):
     return int(code)
 
 
-def assert_renderer_sandbox(api, worker, renderer_processes):
+def assert_renderer_sandbox(api, worker, parent_network, renderer_processes):
     level = len(worker.namespace_pids)
     processes = {int(p.namespace_pids[level - 1]): p for p in snapshot(api) if len(p.namespace_pids) >= level}
     renderers = {int(p["id"]) for p in renderer_processes if p["type"] == "renderer"}
@@ -37,9 +37,22 @@ def assert_renderer_sandbox(api, worker, renderer_processes):
     for pid in renderers:
         renderer = processes[pid]
         assert set(renderer.uids) == set(renderer.gids) == {"10001"} and not renderer.groups, renderer.pid
-        assert renderer.network == worker.network and len(renderer.namespace_pids) > level, renderer.pid
+        depth = len(renderer.namespace_pids)
+        assert depth > level, f"renderer {renderer.pid} PID namespace depth {depth}, worker depth {level}"
+        assert renderer.network != parent_network, f"renderer {renderer.pid} shares the parent network namespace"
         assert renderer.seccomp == "2" and renderer.filters > worker.filters and renderer.no_new_privs == "1", renderer.pid
         assert "--type=renderer" in renderer.arguments and "--no-sandbox" not in renderer.arguments, renderer.pid
+        if renderer.network != worker.network:
+            layout = renderer_network(renderer)
+            assert layout["interfaces"] == ["lo"], f"renderer {renderer.pid} requires only loopback"
+            for family, prefix in (("-4", "0.0.0.0/0"), ("-6", "::/0")):
+                routes = layout[family]
+                assert isinstance(routes, list), f"invalid ip {family} route inventory for renderer {renderer.pid}"
+                for route in routes:
+                    if route["dst"] in ("default", prefix):
+                        # These kernel route types cannot forward packets.
+                        assert route.get("type") in ("unreachable", "blackhole", "prohibit", "throw"), (
+                            f"renderer {renderer.pid} has a usable IPv{family[1:]} default route")
 
 
 @contextmanager
@@ -80,7 +93,7 @@ def verify(api, fixture, docker, control, evaluate):
             assert address == "0" * 32 and (int(flags, 16) & 0x200 or not int(flags, 16) & 1), (flags, interface)
 
     inspect = json.loads(docker("exec", api, "browser-state"))
-    assert_renderer_sandbox(api, worker, inspect["processes"])
+    assert_renderer_sandbox(api, worker, roles["init"].network, inspect["processes"])
     assert "--no-sandbox" not in roles["browser"].arguments
     assert docker("exec", api, "stat", "-c", "%u:%g %a %F", "/tmp/playground/egress.sock") == "10002:65532 660 socket"
     assert docker("exec", api, "stat", "-c", "%u:%g %a", "/tmp/playground") == "65530:65532 755"

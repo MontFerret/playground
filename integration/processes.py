@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -64,6 +65,14 @@ def host_operation(container, operation, **fields):
 def namespace_probe(worker, uid, gid, mode):
     return privileged("nsenter", "--target", worker.pid, "--user", "--net", "--pid", "--root",
                       "--setuid", str(uid), "--setgid", str(gid), "/usr/local/bin/browser-state", "probe", mode)
+
+
+def renderer_network(renderer):
+    # Enter only the network namespace. Python, iproute2, and procfs all come
+    # from the host, even when Chromium has given the renderer an empty root.
+    command = privileged("nsenter", "--target", renderer.pid, "--net", sys.executable, "-B",
+                         str(Path(__file__).resolve()), "renderer-network", renderer.network)
+    return json.loads(subprocess.check_output(command, text=True, timeout=10))
 
 
 @contextmanager
@@ -153,6 +162,15 @@ def kill_checked(container, process):
 def main():
     assert os.geteuid() == 0, "host procfs inspection requires root"
     operation = sys.argv[1]
+    if operation == "renderer-network":
+        # Fail if the process disappeared or changed namespace since discovery.
+        assert os.readlink("/proc/self/ns/net") == sys.argv[2], "renderer network namespace changed"
+        layout = {"interfaces": [name for _, name in socket.if_nameindex()]}
+        for family in ("-4", "-6"):
+            routes = subprocess.check_output(["ip", "-j", family, "route", "show", "table", "all"], text=True)
+            layout[family] = json.loads(routes)
+        print(json.dumps(layout))
+        return
     payload = {"init": sys.argv[2]} if operation == "socket-cleanup" else json.load(sys.stdin)
     init = inspect(payload["init"])
     assert init.executable == "/usr/bin/tini" and init.arguments == (

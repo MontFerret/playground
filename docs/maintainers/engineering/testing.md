@@ -85,7 +85,9 @@ running that same suite. Both require native Linux/amd64 and a working
 unprivileged Chromium sandbox. See [deployment guidance](../../deployment.md).
 These targets are separate from fast Go tests. Process inspection and failure
 injection require a local Linux Docker daemon, Python with pidfd support,
-`nsenter`, and root or noninteractive `sudo` for host procfs inspection.
+`nsenter`, iproute2, and root or noninteractive `sudo` for host procfs inspection.
+Chromium may give a renderer its own network namespace. The host observer checks
+its interfaces and both families of routing tables independently of PID depth.
 
 The packaged suite already checked three startup faults, Mockery extraction,
 one denied WebSocket destination, all essential-child exits, and reaping on

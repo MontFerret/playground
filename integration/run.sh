@@ -7,12 +7,14 @@ if [[ $(uname -s) != Linux || $(uname -m) != x86_64 ]]; then
 fi
 if [[ $(id -u) != 0 ]]; then sudo -n true; fi
 command -v nsenter >/dev/null
+command -v ip >/dev/null
 python3 -B -c 'import os, signal; assert signal.pidfd_send_signal; os.close(os.pidfd_open(os.getpid()))'
 case $(docker info --format '{{.OSType}}/{{.Architecture}}') in
   linux/x86_64|linux/amd64) ;;
   *) echo 'Docker must run Linux/amd64.' >&2; exit 1 ;;
 esac
 if [[ ${1:-} == --check-host ]]; then exit 0; fi
+python3 -B integration/test_renderer_sandbox.py
 project="playground-test-$$"
 export PLAYGROUND_API_CONTAINER="$project-api"
 export PLAYGROUND_FIXTURE_CONTAINER="$project-fixture"
