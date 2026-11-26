@@ -4,11 +4,10 @@ The deployment target is one Linux/amd64 container on standard second-generation
 Cloud Run. No sidecars, separate browser service, Sandboxes preview, added outer
 capabilities, or disabled Chromium sandbox are part of this design.
 
-Local Docker verification is complete only for the tested Linux host. **Live
-Cloud Run validation failed and blocks release.** In particular,
-Cloud Run must allow the new user/network namespace and namespace-local nftables
+Live Cloud Run validation is required for each release candidate. Cloud Run
+must allow the browser namespace, namespace-local nftables and renderer sandbox
 under its standard policy. Failure leaves HTTP unopened and logs a fixed stage
-code. Do not bypass the check or weaken isolation to make a revision ready.
+code. The observed validation results below identify the images tested.
 
 The [execution environment](https://docs.cloud.google.com/run/docs/configuring/execution-environments)
 documents namespace support, while the [runtime contract](https://docs.cloud.google.com/run/docs/container-contract)
@@ -101,7 +100,7 @@ failure is a compatibility blocker. The launcher emits fixed codes such as
 `namespace_start_failed`, `namespace_policy_unavailable`, and
 `renderer_sandbox_unavailable`, without raw Chromium output.
 Namespace and interface inspection logs include only a distinct-namespace
-boolean, interface counts, loopback-only booleans and numeric errno. The parent
+boolean, interface counts, loopback-only booleans, accepted inert tunnel count and numeric errno. The parent
 namespace descriptor is closed before helper or Chromium startup.
 
 The [tagged revision procedure](https://docs.cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration#deploying_new_tagged_revisions)
@@ -123,8 +122,11 @@ out of logs. Verify all five endpoints and these minimum acceptance checks:
   submissions produce failed outcomes without output.
 - CORS succeeds only for the configured origin. With one instance and two
   signaled long-running executions, discovery remains responsive and another
-  execute receives prompt 429. Use an approved Mockery hold scenario; record a
-  gap if no controlled scenario is available rather than substituting sleeps.
+  execute receives prompt 429. Use Mockery's
+  `/scenarios/dynamic-products/delayed/` fixture for three concurrent product
+  queries. The first capacity rejection signals that both slots are occupied.
+  Verify discovery and an additional immediate rejection while both admitted
+  queries await the page, then verify both results and successful admission.
 - Inspect Cloud Monitoring for peak memory/CPU and restarts. Save revision,
   source SHA, image/browser digests, limits, and observed timings with the result.
 
@@ -187,11 +189,28 @@ The locally verified candidate reported:
 
 The container exited with status 1 and initialization rollback finished in 1 ms.
 Netlink is available; changing the enumeration source would not correct the
-actual layout. The required loopback-only gate remains enforced. There is no
+actual layout. That revision enforced the original single-interface rule. There is no
 automatic interface removal, host-network fallback, extra outer capability or
 disabled sandbox.
 
 Nftables, renderer sandbox, steady-state resource usage, authenticated endpoint
-behavior and serving shutdown were not reached on Cloud Run. They remain blocked
-live checks, independently of passing Linux packaged tests. Production service
-`playground` was not changed.
+behavior and serving shutdown were not reached on Cloud Run. These checks were blocked for that image. That validation left production service
+`playground` untouched.
+
+### 2026-11-26 browser namespace validation
+
+Production revision `playground-00002-6kw` also failed at
+`network_interface_layout_invalid`. Private diagnostic revision
+`playground-validation-layout-viyx` (digest
+`sha256:38dd11098357448d03267d66890401d6c6fd6be8cf478b2daffb93b10c0ff6d9`)
+identified one `ipip` and one `ip6tnl` device. Both were down and reported no
+master, lower link, peer namespace, addresses or routes in either IP family.
+
+Private revision `playground-validation-enforce-viyx` (digest
+`sha256:2d1ddf5e5da260483b9c19fcae98b438c8dd6dd6b89c9e90ebdc1a8c2c1fab8a`)
+passed the network, nftables, renderer and browser connection checks before
+listening. All five API operations passed. The checked-in product query
+returned all 12 expected rows, including the zero-priced tablet. The service
+denied anonymous invocation and disallowed destinations, enforced CORS, and
+returned 429 while two delayed product requests ran. Both requests completed
+and capacity recovered. This image was an intermediate compatibility build.

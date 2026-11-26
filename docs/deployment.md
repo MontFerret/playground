@@ -42,8 +42,8 @@ Cloud Run compatibility based only on Docker tests.
 ## Ownership and enforcement
 
 The trusted outer supervisor starts a non-root proxy, creates a private browser
-user/network namespace, and passes private listener descriptors into it. The
-namespace has only loopback and no external interface or route.
+user/network namespace, and passes private listener descriptors into it. Loopback is the
+only usable interface in the browser namespace.
 Its bootstrap root maps to outer UID 65530. It installs UID-specific nftables
 rules there, then starts Chromium as UID 10001 and trusted relays as UID 10002.
 The API and outer proxy run as UID 65532.
@@ -53,10 +53,15 @@ The supervisor passes its network-namespace descriptor to the namespace child.
 The child requires a different namespace device/inode identity and closes that
 descriptor before starting helpers. Netlink remains the authoritative interface
 check; a bounded, strictly parsed `/proc/self/net/dev` view supplies independent
-diagnostics. Exactly one interface, `lo`, is required. Fixed failure stages and
-numeric errno/child exit status distinguish inspection, layout, loopback and
-nftables failures. Logs contain counts and booleans, never interface names,
-addresses, raw child errors or request data.
+diagnostics. The launcher cross-checks the full link list against iproute2's detailed address
+inventory. Alongside loopback it accepts only administratively down, carrier-down
+`ipip` and `ip6tnl` tunnel devices with wildcard endpoints, no attachment, and no
+assigned IP addresses. It inspects every IPv4 and IPv6 routing table and rejects
+routes through another device, indirect next hops and usable default routes.
+An incomplete or interrupted dump stops startup. Logs contain stage codes,
+counts and numeric errors. Before opening HTTP the launcher also verifies that
+the running Chromium process has the browser UID and zero permitted and
+effective capabilities.
 
 The browser UID may open only the namespace proxy port, and may reply to
 established trusted CDP connections. Other TCP, UDP, IPv6, DNS, metadata,

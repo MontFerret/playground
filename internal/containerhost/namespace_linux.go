@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,7 +21,7 @@ func runNamespace(ctx context.Context) (result error) {
 	// ExtraFiles may pass them onward; Chromium must not inherit control FDs.
 	protectControlDescriptors()
 
-	if err := isolateNetwork(); err != nil {
+	if err := isolateNetwork(ctx); err != nil {
 		return err
 	}
 	slog.Info("Container isolation verified", "stage", "network_policy")
@@ -96,6 +98,9 @@ func runNamespace(ctx context.Context) (result error) {
 		healthy := browsercheck.Healthy(check)
 		stop()
 		if healthy {
+			if !browserNetworkPrivilegesDropped(browser.cmd.Process.Pid) {
+				return errors.New("browser_network_privileges_unverified")
+			}
 			slog.Info("Container isolation verified", "stage", "renderer_sandbox")
 
 			break
@@ -158,4 +163,41 @@ func protectControlDescriptors() {
 	for _, fd := range []int{3, 4, 5} {
 		unix.CloseOnExec(fd)
 	}
+}
+
+// Check the running Chromium identity after exec, including capabilities it could
+// promote to effective. This namespace's root is reserved for the supervisor.
+func browserNetworkPrivilegesDropped(pid int) bool {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return false
+	}
+
+	return restrictedBrowserStatus(string(data))
+}
+
+func restrictedBrowserStatus(status string) bool {
+	uidOK, permittedOK, effectiveOK := false, false, false
+	for line := range strings.SplitSeq(status, "\n") {
+		name, value, _ := strings.Cut(line, ":")
+		switch name {
+		case "Uid":
+			ids := strings.Fields(value)
+			uid := strconv.Itoa(browserUID)
+			uidOK = slices.Equal(ids, []string{uid, uid, uid, uid})
+		case "CapPrm", "CapEff":
+			mask, err := strconv.ParseUint(strings.TrimSpace(value), 16, 64)
+			if err != nil || mask != 0 {
+				return false
+			}
+
+			if name == "CapPrm" {
+				permittedOK = true
+			} else {
+				effectiveOK = true
+			}
+		}
+	}
+
+	return uidOK && permittedOK && effectiveOK
 }

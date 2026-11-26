@@ -46,6 +46,11 @@ def failures(directory):
         yield case, {stage}, None, profile, []
     profile = restricted_profile({"socket": [[comparison(0, "NE", socket.AF_INET)]]})
     yield "control", {"control_listener_failed"}, None, profile, []
+    ip = directory / "ip"
+    ip.write_text('#!/bin/sh\nprintf "[]\\n"\nprintf "Dump was interrupted\\n" >&2\n')
+    ip.chmod(0o755)
+    yield "incomplete-links", {"network_link_inspection_failed"}, None, restricted_profile({}), [
+        "--volume", f"{ip}:/usr/sbin/ip:ro"]
     nft = directory / "nft"
     nft.write_text('''#!/bin/sh
 set -eu

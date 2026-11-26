@@ -19,8 +19,9 @@ covers host prerequisites, resource limits, browser ownership, and the product d
 [Release setup and recovery](docs/releasing.md) covers the two registries.
 [Cloud Run validation](docs/cloud-run.md) covers the required second-generation
 compatibility gate before release or production cutover.
-Current live validation fails the loopback-only namespace requirement: both
-interface inspectors report three interfaces. Startup remains closed.
+On gen2 the browser namespace can contain two inactive kernel tunnels. The
+launcher checks their state, addresses, attachments and routes before starting
+Chromium. The validation guide records the tested revisions and digests.
 
 ```sh
 make integration       # private fixtures, actual development API image

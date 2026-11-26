@@ -17,8 +17,9 @@ class RendererSandboxTest(unittest.TestCase):
                                 seccomp="2", filters=2, no_new_privs="1")
         self.worker = dataclasses.replace(self.renderer, pid="200", network="worker-net",
                                           namespace_pids=("200", "10"), filters=1)
-        self.layout = {"interfaces": ["lo"], "-4": [], "-6": []}
-        observer = patch("security.renderer_network", return_value=self.layout)
+        self.layout = {"interfaces": ["lo"], "links": [{"ifname": "lo", "link_type": "loopback",
+                                                        "flags": ["LOOPBACK"]}], "-4": [], "-6": []}
+        observer = patch("security.namespace_network", return_value=self.layout)
         self.inspect = observer.start()
         self.addCleanup(observer.stop)
 
@@ -32,7 +33,7 @@ class RendererSandboxTest(unittest.TestCase):
         self.inspect.assert_not_called()
 
     def test_separate_loopback_namespace(self):
-        self.layout["-4"] = [{"dst": "127.0.0.0/8", "type": "local"}]
+        self.layout["-4"] = [{"dst": "127.0.0.0/8", "type": "local", "dev": "lo"}]
         self.layout["-6"] = [{"dst": "::/0", "type": "unreachable"}]
         self.check()
         self.inspect.assert_called_once_with(self.renderer)
@@ -56,9 +57,22 @@ class RendererSandboxTest(unittest.TestCase):
 
     def test_external_or_missing_interface(self):
         for interfaces in (["lo", "eth0"], []):
-            with self.subTest(interfaces=interfaces), self.assertRaisesRegex(AssertionError, "only loopback"):
+            with self.subTest(interfaces=interfaces), self.assertRaisesRegex(AssertionError, "missing links"):
                 self.layout["interfaces"] = interfaces
                 self.check()
+
+    def test_inert_tunnel_in_renderer_namespace(self):
+        link = {"ifname": "tunl0", "link_type": "ipip", "operstate": "DOWN", "flags": ["NOARP"],
+                "linkinfo": {"info_kind": "ipip", "info_data": {"local": "any", "remote": "any"}}, "addr_info": []}
+        self.layout["interfaces"].append("tunl0")
+        self.layout["links"].append(link)
+        self.check()
+        for key, value in (("flags", ["UP"]), ("addr_info", [{}]), ("link_index", 2), ("link_type", "ether")):
+            with self.subTest(key=key), patch.dict(link, {key: value}), self.assertRaises(AssertionError):
+                self.check()
+        self.layout["-6"].append({"type": "local", "dst": "::1", "dev": "tunl0", "table": 123})
+        with self.assertRaisesRegex(AssertionError, "route outside loopback"):
+            self.check()
 
     def test_usable_default_route(self):
         for family, dst in (("-4", "default"), ("-6", "::/0")):

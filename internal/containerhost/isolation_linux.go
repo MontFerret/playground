@@ -2,6 +2,7 @@ package containerhost
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -17,7 +18,7 @@ import (
 
 const maxInterfaceBytes = 64 << 10
 
-func isolateNetwork() error {
+func isolateNetwork(ctx context.Context) error {
 	if err := checkNetworkNamespace(os.NewFile(5, "parent-network")); err != nil {
 		return err
 	}
@@ -38,8 +39,8 @@ func isolateNetwork() error {
 		return isolationFailure("network_interface_enumeration_failed", netlinkErr)
 	}
 
-	if !onlyLoopback(names) {
-		return isolationFailure("network_interface_layout_invalid", nil)
+	if err := verifyNetworkLayout(ctx, interfaces); err != nil {
+		return err
 	}
 
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)

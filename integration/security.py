@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fixture import approved_ip, private_ip, private_ipv6
-from processes import discover, namespace_probe, renderer_network, snapshot
+from processes import discover, namespace_network, namespace_probe, snapshot
 
 
 def read_probe(command, requests=None):
@@ -46,16 +46,37 @@ def assert_renderer_sandbox(api, worker, parent_network, browser_executable, ren
         assert renderer.executable == browser_executable, f"unexpected renderer executable for {renderer.pid}"
         assert "--no-sandbox" not in " ".join(renderer.arguments).split(), f"renderer {renderer.pid} disables sandbox"
         if renderer.network != worker.network:
-            layout = renderer_network(renderer)
-            assert layout["interfaces"] == ["lo"], f"renderer {renderer.pid} requires only loopback"
-            for family, prefix in (("-4", "0.0.0.0/0"), ("-6", "::/0")):
-                routes = layout[family]
-                assert isinstance(routes, list), f"invalid ip {family} route inventory for renderer {renderer.pid}"
-                for route in routes:
-                    if route["dst"] in ("default", prefix):
-                        # These kernel route types cannot forward packets.
-                        assert route.get("type") in ("unreachable", "blackhole", "prohibit", "throw"), (
-                            f"renderer {renderer.pid} has a usable IPv{family[1:]} default route")
+            assert_namespace_network(namespace_network(renderer))
+
+
+def assert_namespace_network(layout):
+    names = layout["interfaces"]
+    links = layout["links"]
+    assert sorted(names) == sorted(link["ifname"] for link in links) and names.count("lo") == 1, "missing links"
+    for link in links:
+        assert all(link.get(key) is None for key in ("master", "link", "link_index", "link_netnsid")), "attached link"
+        if link["ifname"] == "lo":
+            assert "LOOPBACK" in link["flags"] and link["link_type"] == "loopback"
+            continue
+        info = link["linkinfo"]
+        assert (info["info_kind"], link["link_type"]) in (("ipip", "ipip"), ("ip6tnl", "tunnel6")), "external link"
+        assert link["operstate"] == "DOWN" and not {"UP", "LOWER_UP", "LOOPBACK"}.intersection(link["flags"])
+        assert link["addr_info"] == [], "addressed tunnel"
+        data = info["info_data"]
+        assert data["local"] == data["remote"] == "any" and data.get("link") is None, "configured tunnel"
+
+    for family in ("-4", "-6"):
+        routes = layout[family]
+        assert isinstance(routes, list), "route inventory unavailable"
+        for route in routes:
+            assert not any(key in route for key in ("nexthops", "nhid", "gateway", "via", "encap")), "indirect route"
+            assert route.get("dev") in (None, "lo"), "route outside loopback"
+            if route.get("type") in ("unreachable", "blackhole", "prohibit", "throw"):
+                assert route["dst"]
+                continue
+            assert route["dst"] not in ("default", "0.0.0.0/0", "::/0"), "usable default route"
+            assert route["dev"] == "lo" and route.get("type", "unicast") in (
+                "local", "unicast", "broadcast", "anycast", "multicast"), "unverified route"
 
 
 @contextmanager
@@ -85,9 +106,12 @@ def verify(api, fixture, docker, control, evaluate):
     fields = read_probe(browser_probe("inspect"))
     identity = dict(line.split(":", 1) for line in fields["status"].splitlines())
     assert identity["Uid"].split() == identity["Gid"].split() == ["10001"] * 4, identity["Uid"]
-    assert not identity["Groups"].strip() and int(identity["CapEff"], 16) == 0, identity["Groups"]
+    assert not identity["Groups"].strip() and all(int(identity[key], 16) == 0 for key in ("CapPrm", "CapEff"))
     assert fields["stateWriteDenied"], "browser UID can create files beside the relay socket"
-    assert fields["network"] == worker.network and [i["Name"] for i in fields["interfaces"]] == ["lo"], fields["interfaces"]
+    layout = namespace_network(worker)
+    assert fields["network"] == worker.network
+    assert sorted(i["Name"] for i in fields["interfaces"]) == sorted(layout["interfaces"])
+    assert_namespace_network(layout)
     assert not any(row.split()[1] == "00000000" for row in fields["ipv4"].splitlines()[1:]), fields["ipv4"]
     for row in fields["ipv6"].splitlines():
         address, prefix, *_, flags, interface = row.split()
