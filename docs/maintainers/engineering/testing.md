@@ -87,14 +87,17 @@ These targets are separate from fast Go tests. Process inspection and failure
 injection require a local Linux Docker daemon, Python with pidfd support,
 `nsenter`, iproute2, and root or noninteractive `sudo` for host procfs inspection.
 Chromium may give a renderer its own network namespace. The host observer checks
-its interfaces and both families of routing tables independently of PID depth.
+the worker and renderer link inventories and all IPv4 and IPv6 routing tables
+independently of PID depth. Include the inactive Cloud Run tunnel pair in the
+positive fixtures and an addressed, attached, routed, or active link in the
+rejection cases.
 
 The packaged suite already checked three startup faults, Mockery extraction,
 one denied WebSocket destination, all essential-child exits, and reaping on
 SIGTERM. Its additional checks use reachable canaries for network and socket
 denial, a controlled resolver for numeric proxy dialing, and live procfs for
 renderer verification and reaping after essential-child failure. It also
-exercises control-listener, renderer and mandatory-probe startup failures.
+exercises incomplete link dumps, control-listener, renderer and mandatory-probe startup failures.
 The proxy-loss test releases an already-loaded page after admission closes.
 The healthy control must return the result, and the dependency-loss case must
 exit without successful output. Retain the 8.5-second supervisor limit in both

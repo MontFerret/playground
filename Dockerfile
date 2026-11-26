@@ -13,7 +13,7 @@ LABEL org.opencontainers.image.source="https://github.com/MontFerret/playground"
       org.opencontainers.image.title="Ferret Playground API" \
       org.opencontainers.image.description="Ferret Playground API with isolated Chromium" \
       org.opencontainers.image.version="devel"
-RUN apt-get update -qq && apt-get install -y --no-install-recommends nftables tini && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -qq && apt-get install -y --no-install-recommends iproute2 nftables tini && rm -rf /var/lib/apt/lists/*
 COPY deploy/browser/policy.json /etc/opt/chrome/policies/managed/playground.json
 COPY deploy/browser/policy.json /etc/chromium/policies/managed/playground.json
 COPY --from=build /out/playground /usr/bin/playground

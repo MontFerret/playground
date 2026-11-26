@@ -198,7 +198,7 @@ The unary DOCUMENT function checks the submitted URL against the proxy's
 Mockery hostname and delegates to `lib.Open` using the default driver.
 Container egress controls also cover traffic outside CDP Fetch, including
 WebSockets. The launcher owns a new user/network namespace
-with only loopback. UID rules are installed inside that namespace before Chromium
+whose only usable interface is loopback. UID rules are installed inside that namespace before Chromium
 starts. A permission-protected Unix socket bridges the trusted proxy to the
 parent namespace. The CDP relay inherits a parent-loopback TCP listener and
 connects to browser loopback on the same port (9223).
@@ -207,7 +207,9 @@ An inherited parent namespace descriptor lets the child verify a distinct
 network namespace by device/inode identity. That descriptor closes before
 helpers start and is protected against exec inheritance. Netlink interface
 enumeration remains required; bounded procfs inspection provides an independent
-diagnostic view. Additional interfaces are rejected rather than hidden or removed.
+diagnostic view. The namespace owner inspects links, addresses and both routing
+families before allowing the inactive fallback tunnel types observed on gen2.
+It checks the running browser's identity and capabilities before readiness.
 API/proxy workers use UID 65532, Chromium UID 10001, and trusted namespace relays
 UID 10002. Namespace bootstrap root maps to outer UID 65530. The outer root
 supervisor owns identity setup and child termination; it serves no public HTTP.
