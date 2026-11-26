@@ -29,7 +29,7 @@ def status(result):
     return int(code)
 
 
-def assert_renderer_sandbox(api, worker, parent_network, renderer_processes):
+def assert_renderer_sandbox(api, worker, parent_network, browser_executable, renderer_processes):
     level = len(worker.namespace_pids)
     processes = {int(p.namespace_pids[level - 1]): p for p in snapshot(api) if len(p.namespace_pids) >= level}
     renderers = {int(p["id"]) for p in renderer_processes if p["type"] == "renderer"}
@@ -41,7 +41,10 @@ def assert_renderer_sandbox(api, worker, parent_network, renderer_processes):
         assert depth > level, f"renderer {renderer.pid} PID namespace depth {depth}, worker depth {level}"
         assert renderer.network != parent_network, f"renderer {renderer.pid} shares the parent network namespace"
         assert renderer.seccomp == "2" and renderer.filters > worker.filters and renderer.no_new_privs == "1", renderer.pid
-        assert "--type=renderer" in renderer.arguments and "--no-sandbox" not in renderer.arguments, renderer.pid
+        # CDP identifies the renderer. A zygote child can rewrite argv as one
+        # process title, so switches need not be separate procfs arguments.
+        assert renderer.executable == browser_executable, f"unexpected renderer executable for {renderer.pid}"
+        assert "--no-sandbox" not in " ".join(renderer.arguments).split(), f"renderer {renderer.pid} disables sandbox"
         if renderer.network != worker.network:
             layout = renderer_network(renderer)
             assert layout["interfaces"] == ["lo"], f"renderer {renderer.pid} requires only loopback"
@@ -93,7 +96,7 @@ def verify(api, fixture, docker, control, evaluate):
             assert address == "0" * 32 and (int(flags, 16) & 0x200 or not int(flags, 16) & 1), (flags, interface)
 
     inspect = json.loads(docker("exec", api, "browser-state"))
-    assert_renderer_sandbox(api, worker, roles["init"].network, inspect["processes"])
+    assert_renderer_sandbox(api, worker, roles["init"].network, roles["browser"].executable, inspect["processes"])
     assert "--no-sandbox" not in roles["browser"].arguments
     assert docker("exec", api, "stat", "-c", "%u:%g %a %F", "/tmp/playground/egress.sock") == "10002:65532 660 socket"
     assert docker("exec", api, "stat", "-c", "%u:%g %a", "/tmp/playground") == "65530:65532 755"

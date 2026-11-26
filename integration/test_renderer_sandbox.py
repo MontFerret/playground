@@ -25,7 +25,7 @@ class RendererSandboxTest(unittest.TestCase):
     def check(self, **changes):
         renderer = dataclasses.replace(self.renderer, **changes)
         with patch("security.snapshot", return_value=[self.worker, renderer]):
-            assert_renderer_sandbox("api", self.worker, "parent-net", [{"type": "renderer", "id": 31}])
+            assert_renderer_sandbox("api", self.worker, "parent-net", "chrome", [{"type": "renderer", "id": 31}])
 
     def test_verified_worker_namespace(self):
         self.check(network=self.worker.network)
@@ -41,6 +41,14 @@ class RendererSandboxTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "parent network namespace"):
             self.check(network="parent-net")
         self.inspect.assert_not_called()
+
+    def test_renderer_process_title(self):
+        self.check(arguments=("chrome --type=renderer",))
+        for arguments in (("chrome", "--no-sandbox"), ("chrome --type=renderer --no-sandbox",)):
+            with self.subTest(arguments=arguments), self.assertRaisesRegex(AssertionError, "disables sandbox"):
+                self.check(arguments=arguments)
+        with self.assertRaisesRegex(AssertionError, "renderer executable"):
+            self.check(executable="other")
 
     def test_insufficient_pid_depth(self):
         with self.assertRaisesRegex(AssertionError, "depth 2, worker depth 2"):
