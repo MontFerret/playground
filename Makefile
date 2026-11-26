@@ -40,6 +40,7 @@ integration:
 	bash integration/run.sh
 
 release-snapshot:
+	bash integration/run.sh --check-host
 	python3 scripts/release/test_publish.py
 	python3 scripts/release/test_goreleaser.py
 	goreleaser check

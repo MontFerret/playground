@@ -37,8 +37,11 @@ func runNamespace(ctx context.Context) (result error) {
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := stopProcesses(cleanup, probe, browser, cdp, proxy); err != nil && result == nil {
-			result = err
+		if err := stopProcesses(cleanup, probe, browser, cdp, proxy); err != nil {
+			slog.Error("Namespace cleanup failed", "stage", err.Error())
+			if result == nil {
+				result = err
+			}
 		}
 	}()
 

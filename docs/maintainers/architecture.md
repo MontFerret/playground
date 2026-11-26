@@ -220,7 +220,9 @@ orphaned descendants. The profile disappears with ephemeral container storage.
 Each essential child has one Wait owner. Startup and serving observe its retained
 completion channel directly; the one-shot browser-UID probe has separate startup
 ownership. The filtered environment is built once by the supervisor. Unexpected
-essential-child exit reports a fixed role code with numeric status and follows
-the same bounded shutdown path. Stop deadlines reserve time for forced
-termination and reaping, without shortening the API drain/cleanup allowance.
+essential-child exit reports a fixed role code with numeric status. If the
+proxy or namespace worker exits during serving, the supervisor stops the API
+immediately so admitted work cannot return success during a graceful drain.
+Normal SIGTERM retains the API drain and cleanup allowance. Both paths share
+the shutdown budget and reserve time for forced termination and reaping.
 See [deployment enforcement](../deployment.md).

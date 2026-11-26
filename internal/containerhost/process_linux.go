@@ -51,6 +51,17 @@ func (p *process) failure(code string) error {
 	return errors.New(code)
 }
 
+// The API cannot drain admitted work after a security dependency exits.
+// The API owns no subprocesses. Its tracked process handle and Wait owner
+// remain valid even when it has already exited.
+func (p *process) abort(ctx context.Context) {
+	_ = p.cmd.Process.Kill()
+	select {
+	case <-p.done:
+	case <-ctx.Done():
+	}
+}
+
 func (p *process) stop(ctx context.Context) {
 	select {
 	case <-p.done:

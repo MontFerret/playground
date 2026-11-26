@@ -94,10 +94,13 @@ On SIGTERM the supervisor signals the API first. HTTP admission closes and the
 API drains before cancellation and native/browser cleanup. Only afterwards are
 browser and proxy process groups stopped. Tini reaps orphaned descendants.
 Unexpected browser, proxy or relay exit terminates the whole container. The
-same bounded cleanup covers partial initialization. The API receives its full
-seven-second drain/cleanup allowance; stop deadlines reserve 250 ms for forced
-termination and reaping inside the overall 8.5-second budget. The profile is
-discarded with container storage instead of recursively walking caches during shutdown.
+supervisor stops the API immediately after observing loss of a security
+dependency, so admitted executions cannot complete against the degraded service.
+Normal SIGTERM retains the seven-second API drain and cleanup allowance. Partial
+initialization and both shutdown paths use the same 8.5-second overall budget.
+Stop deadlines reserve 250 ms for forced termination and reaping. Cleanup
+failures use fixed stage codes. The profile is discarded with ephemeral
+container storage.
 
 ## Examples
 
@@ -123,10 +126,11 @@ registered. Its single argument keeps cookies, init scripts and driver options
 under host control.
 
 Each active driver's origin policy applies to HTTP(S) traffic across the
-dedicated Chromium endpoint. All executions use the same policy. WebSocket
-handshakes fall outside CDP Fetch interception. The namespace and
-destination-restricted CONNECT proxy enforce the network boundary throughout
-driver startup and teardown.
+dedicated Chromium endpoint. All executions use the same policy. CDP Fetch
+interception alone is insufficient to enforce WebSocket egress restrictions.
+The namespace and destination-restricted CONNECT proxy enforce the network
+boundary throughout driver startup and teardown. The proxy controls the TCP
+destination. The approved endpoint can receive a WSS handshake on port 443.
 
 The service uses Go 1.27, Ferret `v2.0.0-alpha.62`, Universal API
 `v1.0.0-alpha.21`, and the HTML version pinned in `go.mod`. The browser is MontFerret Chrome
@@ -137,18 +141,42 @@ with chroot permitted for the nested user namespace.
 
 ## Verification and cutover
 
-`make integration` uses the development image. `make release-snapshot` imports
-its OCI archive and runs the same suite with API builds disabled. Both remove
-containers, anonymous volumes and test networks on every exit. A separate
-private TLS fixture uses JavaScript-rendered cards, explicit hold/release
-signals, storage probes and reachable forbidden-request canaries. The suite
-routes the Mockery hostname only inside the test container and trusts one
-ephemeral SPKI. A test-only CDP observer checks target and context IDs through
-the private relay. The suite sets a 60-second execution cap so two held Chromium
-pages can initialize on emulated runners. It separately enforces a shorter
-request deadline and the packaged shutdown budgets.
-After caching images, `PLAYGROUND_USE_CACHED_IMAGES=1 make integration` skips
-builds and pulls. No public fixture website or cloud credentials are needed.
+Run both commands on native Linux/amd64 with a local Docker Engine 25 or later,
+working unprivileged user namespaces and nftables, IPv4 and IPv6 Docker bridges,
+and a working Chromium sandbox. The host needs Go from `go.mod`, Python with
+pidfd support, `nsenter`, OpenSSL, and root or noninteractive `sudo` for host
+procfs inspection. The release target also needs GoReleaser, Skopeo, and jq.
+
+```sh
+make integration
+make release-snapshot
+```
+
+The first command exercises the development image. The second imports its
+generated OCI archive and exercises the release entrypoint and archived binary.
+Both clean up containers, volumes, and test networks. After caching the images,
+`PLAYGROUND_USE_CACHED_IMAGES=1 make integration` skips builds and pulls.
+
+- The fixture serves the checked-in product query and controlled HTTP, TLS,
+  WebSocket, and DNS canaries. It trusts one ephemeral SPKI and resolves the
+  Mockery hostname on a private test network. Direct connections from the API
+  namespace establish that the canaries are reachable. The same suite exercises
+  browser-UID denial for IPv4, IPv6, DNS, loopback and Unix sockets, and checks
+  malformed CONNECT requests, forbidden DNS answers, and numeric-address dialing.
+- The browser cases pair fixture traffic counters with attempts from a page,
+  an iframe, and a dedicated worker when available. A disposable test context
+  uses the packaged proxy and sandbox with no CDP Fetch interception. The suite
+  reports WebSocket attempts blocked before network dispatch and worker startup
+  limitations separately. Speculative preconnect is currently unverified.
+- The suite checks live renderer identities, PID namespaces and seccomp filters,
+  relay identities and socket permissions, and private CDP connectivity. Startup
+  faults exercise the ordinary entrypoint. Essential-process tests check
+  admission, in-flight execution, process reaping, socket removal, and shutdown
+  duration. Test-only fault injection is supplied by the runner.
+
+These checks require no public fixture website or cloud credentials. Record the
+runner, image identity, outcomes, and cleanup durations for each run. The dated
+results below predate the expanded security suite.
 
 Local namespace, UID policy, Unix bridging and renderer verification passed in
 an Ubuntu 24.04 Linux/amd64 QEMU guest (4 vCPUs, 4 GiB RAM). The container used

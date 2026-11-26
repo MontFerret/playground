@@ -80,6 +80,7 @@ func runContainer(ctx context.Context) (result error) {
 	}
 
 	var proxy, namespace, api *process
+	var dependencyLost bool
 	defer func() {
 		started := time.Now()
 		slog.Info("Container cleanup started")
@@ -88,9 +89,13 @@ func runContainer(ctx context.Context) (result error) {
 		cleanup, cancel := context.WithTimeout(context.Background(), 8500*time.Millisecond)
 		defer cancel()
 		if api != nil {
-			drain, stop := context.WithTimeout(cleanup, 7*time.Second+reapTimeout)
-			api.stop(drain)
-			stop()
+			if dependencyLost {
+				api.abort(cleanup)
+			} else {
+				drain, stop := context.WithTimeout(cleanup, 7*time.Second+reapTimeout)
+				api.stop(drain)
+				stop()
+			}
 
 			select {
 			case <-api.done:
@@ -98,18 +103,27 @@ func runContainer(ctx context.Context) (result error) {
 					result = errors.New("api_shutdown_failed")
 				}
 			default:
+				slog.Error("Container cleanup failed", "stage", "api_shutdown_timeout")
 				if result == nil {
 					result = errors.New("api_shutdown_timeout")
 				}
 			}
 		}
 
-		if err := stopProcesses(cleanup, namespace, proxy); err != nil && result == nil {
-			result = err
+		if err := stopProcesses(cleanup, namespace, proxy); err != nil {
+			slog.Error("Container cleanup failed", "stage", err.Error())
+			if result == nil {
+				result = err
+			}
 		}
 
 		// The profile is ephemeral; never walk its cache on the shutdown path.
-		_ = os.Remove(stateDir + "/egress.sock")
+		if err := os.Remove(stateDir + "/egress.sock"); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Error("Container cleanup failed", "stage", "egress_socket_cleanup_failed")
+			if result == nil {
+				result = errors.New("egress_socket_cleanup_failed")
+			}
+		}
 
 		slog.Info("Container cleanup finished", "elapsedMs", time.Since(started).Milliseconds())
 	}()
@@ -183,8 +197,10 @@ func runContainer(ctx context.Context) (result error) {
 	case <-api.done:
 		return api.failure("api_process_exited")
 	case <-proxy.done:
+		dependencyLost = true
 		return proxy.failure("proxy_process_exited")
 	case <-namespace.done:
+		dependencyLost = true
 		return namespace.failure("namespace_process_exited")
 	}
 }
@@ -217,7 +233,23 @@ func awaitBrowser(ctx context.Context, ready *os.File, proxy, namespace *process
 	case <-namespace.done:
 		return namespace.failure("namespace_process_exited")
 	case err := <-result:
-		return err
+		if err != nil {
+			return err
+		}
+
+		// A child can exit at the same time as the readiness notification.
+		select {
+		case <-proxy.done:
+			return proxy.failure("proxy_process_exited")
+		default:
+		}
+
+		select {
+		case <-namespace.done:
+			return namespace.failure("namespace_process_exited")
+		default:
+			return nil
+		}
 	}
 }
 

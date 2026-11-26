@@ -9,7 +9,8 @@ import threading
 import time
 from pathlib import Path
 
-from processes import assert_reaped, discover, kill_checked, snapshot
+from processes import assert_reaped, discover, kill_checked, observe_socket_cleanup, snapshot
+from security import verify as verify_security
 
 
 api = os.environ["PLAYGROUND_API_CONTAINER"]
@@ -101,6 +102,12 @@ def browser_state():
             "targets": {t["id"] for t in targets if t["type"] == "page" or t["context"] != default_context}}
 
 
+def evaluate(page, expression):
+    result = subprocess.check_output(["docker", "exec", "-i", api, "browser-state", "evaluate", page],
+                                     input=json.dumps(expression), text=True, stderr=subprocess.STDOUT, timeout=20)
+    return json.loads(result)
+
+
 def eventually(predicate, timeout=7):
     until = time.monotonic() + timeout
     while not predicate():
@@ -123,7 +130,7 @@ class Held:
         self.query = query or f"LET page = {document('/hold/'+token)} RETURN 1"
         self.conn = http.client.HTTPConnection(addr, timeout=http_timeout)
         self.result = None
-        self.thread = threading.Thread(target=self.run)
+        self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
 
     def wait(self):
@@ -223,6 +230,11 @@ def checks():
     assert control("count", "forbidden") == "1"
     eventually(lambda: browser_state() == baseline)
     print("Verified rejected documents, redirects, subresources and WebSocket destinations.", flush=True)
+    verify_security(api, fixture, docker, control, evaluate)
+    assert execute(demo) == [{"brand":"Northwind","title":"Laptop","price":1299.5},
+                             {"brand":"Contoso","title":"Mouse","price":19.99}]
+    eventually(lambda: browser_state() == baseline)
+
     def held_session(token):
         return Held(token, f"LET page = {document('/session/'+token)}\n"
                     'LET node = page[~? css`#state`]\n'
@@ -268,6 +280,30 @@ def checks():
     assert marker not in api_logs()
     print("Verified overlapping executions, disconnect, timeout and resource cleanup.", flush=True)
 
+    def stopped_admission():
+        try:
+            status, _ = request("execute", program("RETURN 1"))
+            return status == 503
+        except (OSError, http.client.HTTPException):
+            return True
+
+    def held_page(token):
+        page = Held(token, f"LET page = {document('/hold-page/'+token)}\n"
+                          'LET node = page[~? css`#state`]\n'
+                          'node.textContent = "waiting"\n'
+                          'RETURN WAITFOR VALUE node.textContent WHEN . != "waiting" TIMEOUT 55000')
+        page.wait()
+        targets = json.loads(api_exec("browser-state"))["targets"]
+        target, = [item["id"] for item in targets if item["url"] == site + "/hold-page/" + token]
+        return page, target
+
+    release_page = 'document.querySelector("#state").textContent = "released"'
+    control_page, target = held_page("surviving-page")
+    assert evaluate(target, release_page) == "released"
+    control_page.join()
+    assert control_page.result and control_page.result[0] == 200 and control_page.result[1]["output"] == "released"
+    eventually(lambda: browser_state() == baseline)
+
     shutdowns = []
     for force in (False, True):
         active = Held("forced") if force else held_session("graceful")
@@ -278,13 +314,6 @@ def checks():
         signaled = subprocess.Popen(["docker", "kill", "--signal=SIGTERM", cid],
                                     stdout=subprocess.DEVNULL)
         if not force:
-            def stopped_admission():
-                try:
-                    status, _ = request("environment")
-                    return status == 503
-                except (OSError, http.client.HTTPException):
-                    return True
-
             eventually(stopped_admission, timeout=3)
             active.release()
             active.join()
@@ -311,32 +340,64 @@ def checks():
             docker("start", api)
             addr = docker("port", api, "8080/tcp")
             eventually(ready, timeout=60)
-    for role in ("browser", "proxy-relay", "cdp-relay", "proxy", "namespace", "api"):
+    failures = {"browser": "chromium_exited", "proxy-relay": "proxy_relay_exited", "cdp-relay": "cdp_relay_exited",
+                "proxy": "proxy_process_exited", "namespace": "namespace_process_exited", "api": "api_process_exited"}
+    for role, stage in failures.items():
         docker("start", api)
         addr = docker("port", api, "8080/tcp")
         eventually(ready, timeout=60)
         assert json.loads(execute(state("/read"))) == ["", "", ""]
         child = discover(api)[role]
-        pending = Held("browser-failure") if role == "browser" else None
-        if pending:
+        target = None
+        if role == "proxy":
+            pending, target = held_page("proxy-loss-page")
+        elif role != "api":
+            pending = Held(role + "-failure")
             pending.wait()
+        else:
+            pending = None
+        processes = snapshot(api)
+        log_offset = len(api_logs().splitlines())
         try:
             kill_checked(api, dataclasses.replace(child, started="0"))
         except subprocess.CalledProcessError:
             pass
         else:
             raise AssertionError("failure injection accepted a changed process identity")
-        before = time.monotonic()
-        kill_checked(api, child)
-        code = subprocess.check_output(["docker", "wait", api], text=True, timeout=10).strip()
-        assert code != "0" and time.monotonic() - before < 9, (role, code)
+        with observe_socket_cleanup(api) as assert_socket_removed:
+            before = time.monotonic()
+            kill_checked(api, child)
+            if pending:
+                eventually(stopped_admission, timeout=3)
+                if target:
+                    try:
+                        evaluate(target, release_page)
+                    except subprocess.CalledProcessError:
+                        # CDP can be gone by the time the API stops serving.
+                        pass
+                else:
+                    pending.release()
+            code = subprocess.check_output(["docker", "wait", api], text=True, timeout=10).strip()
+            elapsed = time.monotonic() - before
+            assert code == "1" and elapsed < 9, (role, code, elapsed)
+            assert_socket_removed()
         assert docker("inspect", "--format", "{{.State.Pid}}", api) == "0"
+        assert_reaped(processes)
         if pending:
-            pending.release()
             pending.join()
-            assert pending.result is None or pending.result[1].get("status") != "ok", pending.result
-        assert marker not in api_logs()
+            assert pending.result is None or (pending.result[1].get("status") != "ok"
+                                              and "output" not in pending.result[1]), pending.result
+        logs = api_logs()
+        assert marker not in logs
+        events = [json.loads(line) for line in logs.splitlines()[log_offset:] if line.startswith("{")]
+        assert any(event.get("stage") == stage and event.get("msg") == "Container child exited"
+                   and event.get("signal") == 9 for event in events), events
+        assert not any(event.get("msg") in ("Container cleanup failed", "Namespace cleanup failed") for event in events), events
+        cleanup, = [event for event in events if event.get("msg") == "Container cleanup finished"]
+        assert cleanup["elapsedMs"] <= 8500, cleanup
+        print(f"essential failure role={role} exit={code} elapsed={elapsed:.2f}s supervisor={cleanup['elapsedMs']}ms", flush=True)
     resources = json.loads(docker("inspect", "--format", "{{json .HostConfig}}", api))
+    assert int(control("count", "cdp-observations")) > 0 and control("count", "exposed-cdp") == "0"
     print("Verification evidence: " + json.dumps({
         "runner": docker("info", "--format", "{{.OperatingSystem}} {{.Architecture}} {{.KernelVersion}}"),
         "runnerCPUs": int(docker("info", "--format", "{{.NCPU}}")),

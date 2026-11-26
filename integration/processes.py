@@ -6,6 +6,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+from contextlib import contextmanager
 
 
 @dataclasses.dataclass(frozen=True)
@@ -18,6 +19,11 @@ class Process:
     uids: tuple
     groups: tuple
     arguments: tuple
+    gids: tuple
+    namespace_pids: tuple
+    seccomp: str
+    filters: int
+    no_new_privs: str
 
 
 def decode(value):
@@ -30,19 +36,56 @@ def inspect(pid):
     stat = (path / "stat").read_text().rsplit(") ", 1)[1].split()
     return Process(str(pid), os.readlink(path / "exe"), os.readlink(path / "ns/net"), stat[1], stat[19],
                    tuple(fields["Uid"].split()), tuple(fields["Groups"].split()),
-                   tuple((path / "cmdline").read_bytes().decode().rstrip("\0").split("\0")))
+                   tuple((path / "cmdline").read_bytes().decode().rstrip("\0").split("\0")),
+                   tuple(fields["Gid"].split()), tuple(fields["NSpid"].split()), fields["Seccomp"].strip(),
+                   int(fields["Seccomp_filters"]), fields["NoNewPrivs"].strip())
 
 
-def host_operation(container, operation, **fields):
+def container_init(container):
     # These tests require a local Linux Docker daemon. Host root can inspect
     # nondumpable workers without granting the production container extra caps.
     init = subprocess.check_output(["docker", "inspect", "--format", "{{.State.Pid}}", container], text=True).strip()
     assert int(init) > 0, "container is not running"
-    privilege = [] if os.geteuid() == 0 else ["sudo", "-n"]
+    return init
+
+
+def privileged(*command):
+    return list(command) if os.geteuid() == 0 else ["sudo", "-n", *command]
+
+
+def host_operation(container, operation, **fields):
+    init = container_init(container)
     result = subprocess.check_output(
-        [*privilege, sys.executable, "-B", str(Path(__file__).resolve()), operation],
-        input=json.dumps({"init": init, **fields}), text=True)
+        privileged(sys.executable, "-B", str(Path(__file__).resolve()), operation),
+        input=json.dumps({"init": init, **fields}), text=True, timeout=10)
     return json.loads(result)
+
+
+def namespace_probe(worker, uid, gid, mode):
+    return privileged("nsenter", "--target", worker.pid, "--user", "--net", "--pid", "--root",
+                      "--setuid", str(uid), "--setgid", str(gid), "/usr/local/bin/browser-state", "probe", mode)
+
+
+@contextmanager
+def observe_socket_cleanup(container):
+    # Keep the tmpfs directory open while Tini exits. Checking the original
+    # directory still distinguishes unlink from Docker discarding the mount.
+    watcher = subprocess.Popen(privileged(sys.executable, "-B", str(Path(__file__).resolve()),
+                                          "socket-cleanup", container_init(container)),
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert watcher.stdout.readline().strip() == "ready", "socket cleanup witness unavailable"
+
+        def assert_removed():
+            output, _ = watcher.communicate("check\n", timeout=5)
+            assert watcher.returncode == 0 and output.strip() == "removed", output
+
+        yield assert_removed
+    finally:
+        if watcher.poll() is None:
+            watcher.stdin.close()
+            watcher.wait(timeout=5)
+        watcher.stdout.close()
 
 
 def snapshot(container):
@@ -89,6 +132,8 @@ def discover(container):
         assert set(process.uids) == {uid}, f"incorrect UID: {role}"
         if role == "init":
             continue
+        expected_gid = "65532" if role in ("cdp-relay", "proxy-relay") else uid
+        assert set(process.gids) == {expected_gid}, f"incorrect GID: {role}"
         assert not process.groups, f"inherited supplementary groups: {role}"
         assert process.executable == ("/opt/chrome-linux64/chrome" if role == "browser" else "/usr/bin/playground"), role
         parent = "namespace" if role in ("browser", "proxy-relay", "cdp-relay") else "supervisor"
@@ -107,11 +152,27 @@ def kill_checked(container, process):
 
 def main():
     assert os.geteuid() == 0, "host procfs inspection requires root"
-    payload = json.load(sys.stdin)
+    operation = sys.argv[1]
+    payload = {"init": sys.argv[2]} if operation == "socket-cleanup" else json.load(sys.stdin)
     init = inspect(payload["init"])
     assert init.executable == "/usr/bin/tini" and init.arguments == (
         "/usr/bin/tini", "--", "/usr/bin/playground", "container"), "unexpected container init"
-    if sys.argv[1] == "snapshot":
+    if operation == "socket-cleanup":
+        descriptor = os.open(f"/proc/{init.pid}/root/tmp/playground", os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.stat("egress.sock", dir_fd=descriptor)
+            print("ready", flush=True)
+            if sys.stdin.readline().strip() == "check":
+                try:
+                    os.stat("egress.sock", dir_fd=descriptor)
+                except FileNotFoundError:
+                    print("removed", flush=True)
+                else:
+                    raise AssertionError("egress socket survived shutdown")
+        finally:
+            os.close(descriptor)
+        return
+    if operation == "snapshot":
         records = []
         for pid in payload["pids"]:
             try:
@@ -120,7 +181,7 @@ def main():
                 continue
         print(json.dumps(records))
         return
-    assert sys.argv[1] == "kill", "unknown test operation"
+    assert operation == "kill", "unknown test operation"
     expected = decode(payload["target"])
     descriptor = os.pidfd_open(int(expected.pid))
     try:
