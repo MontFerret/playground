@@ -1,14 +1,17 @@
 """Black-box checks of the API image selected by integration/run.sh."""
+import base64
 import dataclasses
 import http.client
 import json
 import os
 import socket
+import struct
 import subprocess
 import threading
 import time
 from pathlib import Path
 
+from fixture import private_ip
 from processes import assert_reaped, discover, kill_checked, observe_socket_cleanup, snapshot
 from security import verify as verify_security
 
@@ -65,6 +68,12 @@ def execute(text, **fields):
     return result.get("output")
 
 
+def assert_execution_failure(text, code="runtime_error", **fields):
+    status, result = request("execute", program(text, **fields))
+    assert status == 200 and result["status"] == "failed" and "output" not in result, (status, result)
+    assert [item["code"] for item in result["diagnostics"]] == [code], result
+
+
 # Keep one private fixture signal process alive. Starting a new docker exec
 # for every release can consume the shutdown grace period on slower runners.
 agent = subprocess.Popen(
@@ -119,6 +128,11 @@ def document(path):
     return f'DOCUMENT("{site}{path}")'
 
 
+def html_open(path, browser=False):
+    suffix = ', {driver: "cdp"}' if browser else ""
+    return f'web::html::open("{site}{path}"{suffix})'
+
+
 def state(path):
     return (f'LET page = {document(path)}\n'
             'RETURN WAITFOR VALUE page[~? css`#state`].textContent WHEN . != "" TIMEOUT 5000')
@@ -151,6 +165,117 @@ class Held:
     def join(self):
         self.thread.join(http_timeout)
         assert not self.thread.is_alive()
+
+
+def verify_html_examples(baseline):
+    limits = {"options": {"timeoutMs": 5000}}
+    assert execute('LET p = web::html::open(@url) RETURN (query one "#state" in p using css).textContent',
+                   params={"url": site + "/html-docs"}, **limits) == "static"
+    assert control("count", "html-docs") == "1"
+    assert execute(f'RETURN {html_open("/html-docs-redirect")}.title', **limits) == "HTML fixture"
+    assert control("count", "html-docs") == "2"
+    assert control("count", "html-docs-script") == "0"
+    assert browser_state() == baseline
+    assert execute('LET p = web::html::parse(@html) RETURN p.title',
+                   params={"html": "<title>Supplied HTML</title>"}, **limits) == "Supplied HTML"
+
+    page = f'LET p = {html_open("/html-docs", browser=True)}\n'
+    assert execute(page + 'RETURN (query one "#state" in p using css).textContent', **limits) == "rendered"
+    assert control("wait", "html-docs-script") == "observed"
+    assert execute(page + '''
+        LET button = query one "#action" in p using css
+        DISPATCH "click" in button
+        RETURN WAITFOR VALUE (query one "#state" in p using css).textContent
+            WHEN . == "clicked" TIMEOUT 2500 ON TIMEOUT FAIL
+    ''', **limits) == "clicked"
+    assert execute(page + '''
+        web::html::hover(query one "#action" in p using css)
+        RETURN WAITFOR VALUE (query one "#state" in p using css).textContent
+            WHEN . == "hovered" TIMEOUT 2500 ON TIMEOUT FAIL
+    ''', **limits) == "hovered"
+    assert execute(page + '''
+        web::html::scroll_bottom(p)
+        RETURN WAITFOR VALUE (query one "#state" in p using css).textContent
+            WHEN . == "scrolled" TIMEOUT 2500 ON TIMEOUT FAIL
+    ''', **limits) == "scrolled"
+    capture = execute(page + 'RETURN web::html::screenshot(p, {format:"png", width:80, height:48})', **limits)
+    assert len(json.dumps(capture).encode()) <= 1 << 20
+    png = base64.b64decode(capture, validate=True)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and png[12:16] == b"IHDR"
+    assert struct.unpack(">II", png[16:24]) == (80, 48)
+
+    assert execute('''
+        RETURN FOR n IN 1..2
+            LET p = web::html::open(CONCAT(@base, TO_STRING(n)))
+            RETURN (query one ".product" in p using css).textContent
+    ''', params={"base": site + "/html-page/"}, **limits) == ["Product 1", "Product 2"]
+    assert execute(f'LET p = {html_open("/html-page/1", browser=True)}\n' + '''
+        LET before = (query one ".product" in p using css).textContent
+        LET next = query one "a.next" in p using css
+        WAITFOR EVENT "navigation" IN p
+            TRIGGER DISPATCH "click" IN next
+            TIMEOUT 2500 ON TIMEOUT FAIL
+        RETURN [before, (query one ".product" in p using css).textContent]
+    ''', **limits) == ["Product 1", "Product 2"]
+    eventually(lambda: browser_state() == baseline)
+
+    for mode in ("private", "mixed"):
+        control("dns", mode)
+        before = control("count", f"tcp-{private_ip}-443")
+        try:
+            assert_execution_failure(f'RETURN {html_open("/html-docs")}.title', **limits)
+            assert control("count", f"tcp-{private_ip}-443") == before
+            assert int(control("count", "dns-queries")) > 0
+        finally:
+            control("dns", "public")
+    control("dns", "rebind")
+    try:
+        assert execute(f'RETURN {html_open("/html-docs")}.title', **limits) == "HTML fixture"
+        assert control("count", "dns-queries") == "1"
+    finally:
+        control("dns", "public")
+
+    for browser in (False, True):
+        assert_execution_failure(f'RETURN {html_open("/redirect", browser=browser)}.title', **limits)
+    for query in (
+        'RETURN web::html::open("https://forbidden.test/canary/html-denied")',
+        'RETURN web::html::open("https://forbidden.test/canary/html-denied", {driver:"cdp"})',
+        f'RETURN web::html::open("{site}", {{driver:"cdp", keepCookies:true}})',
+        'RETURN web::html::parse("<p>content</p>", {driver:"cdp"})',
+        f'RETURN web::html::download("{site}/canary/html-denied")',
+        f'RETURN DOWNLOAD("{site}/canary/html-denied")',
+    ):
+        assert_execution_failure(query, **limits)
+    assert_execution_failure(f'RETURN web::html::open("{site}", @options)',
+                             params={"options": {"driver": "unavailable"}}, **limits)
+    assert control("count", "html-denied") == "0"
+    eventually(lambda: browser_state() == baseline)
+
+    try:
+        assert_execution_failure(f'RETURN {html_open("/hold/html-memory-deadline")}.title',
+                                 "execution_timeout", **limits)
+        assert control("count", "html-memory-deadline") == "1"
+    finally:
+        control("release", "html-memory-deadline")
+
+    held = Held("html-memory-disconnect", f'RETURN {html_open("/hold/html-memory-disconnect")}.title')
+    peer = Held("html-memory-peer", f'RETURN {html_open("/hold/html-memory-peer")}.title')
+    try:
+        held.wait()
+        peer.wait()
+        assert request("execute", program("RETURN 1"))[0] == 429
+        held.conn.sock.shutdown(socket.SHUT_RDWR)
+        eventually(lambda: request("execute", program("RETURN 1"))[0] == 200)
+        assert browser_state() == baseline
+    finally:
+        held.release()
+        peer.release()
+        held.join()
+        peer.join()
+    assert peer.result[0] == 200 and peer.result[1]["status"] == "ok", peer.result
+    assert held.result is None, held.result
+
+    print("Verified native HTML extraction, interaction, screenshot, pagination and egress.", flush=True)
 
 
 def checks():
@@ -236,13 +361,15 @@ def checks():
     assert control("count", "forbidden") == "1"
     eventually(lambda: browser_state() == baseline)
     print("Verified rejected documents, redirects, subresources and WebSocket destinations.", flush=True)
+    verify_html_examples(baseline)
+    assert control("count", "forbidden") == "1"
     verify_security(api, fixture, docker, control, evaluate)
     assert execute(demo) == [{"brand":"Northwind","title":"Laptop","price":1299.5},
                              {"brand":"Contoso","title":"Mouse","price":19.99}]
     eventually(lambda: browser_state() == baseline)
 
     def held_session(token):
-        return Held(token, f"LET page = {document('/session/'+token)}\n"
+        return Held(token, f"LET page = {html_open('/session/'+token, browser=True)}\n"
                     'LET node = page[~? css`#state`]\n'
                     'node.textContent = "waiting"\n'
                     'RETURN WAITFOR VALUE node.textContent WHEN . != "waiting" TIMEOUT 55000')

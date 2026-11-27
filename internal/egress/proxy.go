@@ -1,8 +1,9 @@
-// Package egress provides the browser's single-destination CONNECT proxy.
+// Package egress enforces the hosted HTML destination policy.
 package egress
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -13,34 +14,58 @@ import (
 // MockeryHost is the sole destination for hosted HTML and browser egress.
 const MockeryHost = "mockery.ferretlang.org"
 
+var errDestinationDenied = errors.New("destination denied")
+
 // Handler permits only CONNECT to the public Mockery HTTPS origin.
 func Handler() http.Handler {
 	return http.HandlerFunc(tunnel)
 }
 
+// DialMockery resolves the sole HTTPS destination and dials a validated public
+// IPv4 address. The caller is responsible for TLS with the original hostname.
+func DialMockery(ctx context.Context, network, address string) (net.Conn, error) {
+	if (network != "tcp" && network != "tcp4") || address != MockeryHost+":443" {
+		return nil, errDestinationDenied
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", MockeryHost)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ips) == 0 {
+		return nil, errors.New("Mockery has no IPv4 addresses")
+	}
+
+	for _, ip := range ips {
+		if !publicIPv4(ip.Unmap()) {
+			return nil, errDestinationDenied
+		}
+	}
+
+	// Dial the exact address checked above. A second name lookup here would
+	// allow the resolver to rebind an approved destination.
+	return (&net.Dialer{}).DialContext(ctx, "tcp4", net.JoinHostPort(ips[0].Unmap().String(), "443"))
+}
+
 func tunnel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodConnect || r.RequestURI != MockeryHost+":443" || r.Host != r.RequestURI {
 		http.Error(w, "denied", http.StatusForbidden)
+
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", MockeryHost)
-	if err != nil || len(ips) == 0 {
-		http.Error(w, "unavailable", 502)
-		return
-	}
-	for _, ip := range ips {
-		if !publicIPv4(ip.Unmap()) {
-			http.Error(w, "denied", 403)
-			return
-		}
-	}
-	// Dial the exact address checked above. A second name lookup here would
-	// allow the resolver to rebind an approved destination.
-	upstream, err := (&net.Dialer{}).DialContext(ctx, "tcp4", net.JoinHostPort(ips[0].Unmap().String(), "443"))
+
+	upstream, err := DialMockery(r.Context(), "tcp4", r.RequestURI)
 	if err != nil {
-		http.Error(w, "unavailable", 502)
+		if errors.Is(err, errDestinationDenied) {
+			http.Error(w, "denied", http.StatusForbidden)
+		} else {
+			http.Error(w, "unavailable", http.StatusBadGateway)
+		}
+
 		return
 	}
 	defer upstream.Close()

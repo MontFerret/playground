@@ -477,6 +477,7 @@ components:
             standardLibrary: {type: string, enum: [safe]}
             modules:
               type: array
+              description: Browser-free startup returns an empty list. The hosted html entry identifies a restricted set of functions.
               items:
                 $ref: '#/components/schemas/Module'
         capabilities:
@@ -494,6 +495,7 @@ components:
               $ref: '#/components/schemas/ToolingLimits'
     Module:
       type: object
+      description: A host registration. The hosted html module exposes unary DOCUMENT and WEB::HTML functions OPEN, PARSE, HOVER, SCROLL_BOTTOM, and SCREENSHOT.
       additionalProperties: false
       required: [name, version]
       properties:

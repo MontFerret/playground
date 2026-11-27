@@ -183,6 +183,22 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/cards.json":
             self.reply(json.dumps([dict(brand="Northwind", title="Laptop", price="$1299.50"),
                                    dict(brand="Contoso", title="Mouse", price="$19.99")]), kind="application/json")
+        elif path == "/html-docs":
+            count("html-docs")
+            self.reply("""<title>HTML fixture</title><p id="state">static</p>
+                <button id="action" onclick="state.textContent='clicked'"
+                        onmouseenter="state.textContent='hovered'">Go</button>
+                <div style="height:2000px"></div>
+                <script>
+                    const state = document.querySelector('#state');
+                    state.textContent = 'rendered';
+                    fetch('/canary/html-docs-script');
+                    addEventListener('scroll', () => state.textContent = 'scrolled');
+                </script>""")
+        elif path in ("/html-page/1", "/html-page/2"):
+            page = path.rsplit("/", 1)[1]
+            link = '<a class="next" href="/html-page/2">Next</a>' if page == "1" else ""
+            self.reply(f'<p class="product">Product {page}</p>' + link)
         elif path in ("/write", "/read"):
             script = ""
             if path == "/write":
@@ -194,6 +210,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/redirect":
             self.send_response(302)
             self.send_header("Location", forbidden + "/redirect-target")
+            self.end_headers()
+        elif path == "/html-docs-redirect":
+            self.send_response(302)
+            self.send_header("Location", "/html-docs")
             self.end_headers()
         elif path.startswith("/session/"):
             token = json.dumps(path.rsplit("/", 1)[1])
