@@ -90,14 +90,18 @@ Example response when service build-version metadata is unavailable:
 
 The service constructs a real native engine with `stdlib.Safe()`, which excludes
 filesystem and network standard-library groups. Browser-free startup registers
-no optional modules. The packaged deployment registers the restricted HTML
-surface described in [deployment guidance](docs/deployment.md). Its only HTML
-function is `DOCUMENT(url)`. It opens the HTTPS Mockery origin in a fresh
-browser context on every call. Cookies and local storage are private to that
-page, including when a query opens multiple pages. Environment
-requests read detached metadata; they do not evaluate
-FQL, launch browsers, or make external requests. The standard-library profile
-controls function availability. Execution shares the service process.
+no optional modules. Browser-enabled startup reports the `html` module in
+environment discovery. Its registrations are listed in the
+[hosted HTML guide](docs/deployment.md#hosted-html).
+`web::html::open(url)` uses HTTP and parses the response in memory. Pass
+`{driver:"cdp"}` to run the page in Chromium, or use `web::html::parse(html)`
+to parse supplied content offline. Both fetching drivers are restricted to
+HTTPS Mockery. The legacy `DOCUMENT(url)` always uses CDP.
+
+Environment requests return detached metadata without evaluating FQL,
+launching browsers, or making external requests. Execution shares the service
+process. See the [documentation example compatibility matrix](docs/documentation-examples.md)
+for runnable examples and their verification status.
 
 The runtime version comes from dependency build metadata, honoring versioned
 replacements. Unversioned local replacements and missing development metadata

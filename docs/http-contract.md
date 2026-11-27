@@ -199,7 +199,9 @@ native closure can delay settlement. The service does not retry the run.
 The API and isolated Chromium run in one container. The launcher verifies the
 renderer sandbox and actual browser-namespace egress before HTTP starts. It
 keeps CDP and proxy sockets private, and fixes the runtime's CDP origin
-internally. Native FQL networking and filesystem access remain disabled.
+internally. The `html` entry in environment discovery identifies the
+[selected hosted HTML functions](deployment.md#hosted-html). Filesystem and
+general network standard-library functions are unavailable.
 
 The packaged listener binds `0.0.0.0:$PORT` when Cloud Run supplies PORT, with an
 explicit PLAYGROUND_LISTEN_ADDR taking precedence. Core development still

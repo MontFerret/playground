@@ -89,6 +89,7 @@ printf 'nameserver 185.199.108.153\noptions ndots:1 attempts:1 timeout:1\n' > "$
 bash deploy/container/run.sh "$image" "$PLAYGROUND_API_CONTAINER" 0 \
   --network "$project-front" --network "name=$project,ip=185.199.108.154" --network "$project-private" \
   --volume "$FIXTURE_TLS/resolv.conf:/etc/resolv.conf:ro" \
+  --volume "$FIXTURE_TLS/cert.pem:/etc/ssl/certs/playground-fixture.pem:ro" \
   --volume "$FIXTURE_TLS/browser-state:/usr/local/bin/browser-state:ro" \
   --env "PLAYGROUND_FIXTURE_SPKI=$spki" \
   --env PLAYGROUND_MAX_EXECUTION_TIMEOUT=60s --env PLAYGROUND_WRITE_TIMEOUT=65s >/dev/null

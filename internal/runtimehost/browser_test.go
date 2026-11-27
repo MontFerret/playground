@@ -12,13 +12,12 @@ import (
 	"time"
 
 	"github.com/MontFerret/ferret/v2/pkg/module"
-	"github.com/MontFerret/ferret/v2/pkg/runtime"
 	"golang.org/x/net/websocket"
 
 	"github.com/MontFerret/playground/internal/playground"
 )
 
-func TestHostedDocumentSurface(t *testing.T) {
+func TestHostedHTMLSurface(t *testing.T) {
 	var probes atomic.Int32
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		probes.Add(1)
@@ -29,12 +28,19 @@ func TestHostedDocumentSurface(t *testing.T) {
 	host := toolingTestHost(t, func(boot module.Bootstrap) error {
 		library := boot.Host().Library()
 		before := library.Size()
-		if err := registerDocument(boot); err != nil {
+		if err := registerHTML(boot); err != nil {
 			return err
 		}
 
-		if library.Size() != before+1 || !library.Function().A1().Has("DOCUMENT") {
-			t.Fatal("expected exactly one unary DOCUMENT registration")
+		if library.Size() != before+6 || !library.Function().A1().Has("DOCUMENT") {
+			t.Fatal("expected a unary DOCUMENT and five namespaced registrations")
+		}
+
+		html := library.Namespace("WEB").Namespace("HTML").Function()
+		for _, name := range []string{"OPEN", "PARSE", "HOVER", "SCROLL_BOTTOM", "SCREENSHOT"} {
+			if !html.Var().Has(name) {
+				t.Errorf("missing variadic HTML registration %s", name)
+			}
 		}
 
 		return nil
@@ -48,6 +54,19 @@ func TestHostedDocumentSurface(t *testing.T) {
 		`DOCUMENT("https://user@mockery.ferretlang.org/")`, `DOCUMENT("https://mockery.ferretlang.org.example/")`,
 		`DOCUMENT("about:blank")`, `DOCUMENT("data:text/html,hello")`, `DOCUMENT("file:///etc/hosts")`,
 		`DOWNLOAD("https://mockery.ferretlang.org")`, `PARSE("<p>example</p>")`, `CLICK(NONE, "p")`,
+		`WEB::HTML::DOWNLOAD("https://mockery.ferretlang.org")`,
+		`WEB::HTML::OPEN()`,
+		`WEB::HTML::OPEN(42, {driver: "cdp"})`,
+		`WEB::HTML::OPEN("https://mockery.ferretlang.org", {driver: "cdp", timeout: 0})`,
+		`WEB::HTML::OPEN("https://mockery.ferretlang.org", {driver: "cdp", address: "http://localhost"})`,
+		`WEB::HTML::OPEN("https://mockery.ferretlang.org", {driver: "cdp", proxy: "http://localhost"})`,
+		`WEB::HTML::OPEN("https://mockery.ferretlang.org", {driver: "third-party"})`,
+		`WEB::HTML::OPEN("https://mockery.ferretlang.org", {driver: "cdp", keepCookies: true})`,
+		`WEB::HTML::OPEN("https://user@mockery.ferretlang.org/")`,
+		`WEB::HTML::OPEN("https://example.test/")`,
+		`WEB::HTML::OPEN("file:///etc/hosts", {driver: "cdp"})`,
+		`WEB::HTML::PARSE(42)`,
+		`WEB::HTML::PARSE("<p>example</p>", {driver: "cdp"})`,
 	} {
 		result, err := host.Execute(t.Context(), playground.Source{Text: "RETURN " + query}, playground.ExecuteOptions{MaxOutputBytes: 1024})
 		if result.Failure != playground.RuntimeError || result.Output != nil {
@@ -59,12 +78,14 @@ func TestHostedDocumentSurface(t *testing.T) {
 		t.Fatalf("rejected inputs contacted CDP %d times", count)
 	}
 
-	for _, allowed := range []string{"https://mockery.ferretlang.org/path?q=1", "https://mockery.ferretlang.org:443/"} {
-		// An admitted URL reaches lib.Open's default-driver lookup.
-		_, err := openDocument(t.Context(), runtime.NewString(allowed))
-		if !errors.Is(err, runtime.ErrNotFound) {
-			t.Fatalf("%s: expected driver lookup, got %v", allowed, err)
-		}
+	query := playground.Source{Text: `LET page = web::html::parse(@html)
+RETURN (query one "p" in page using css).textContent`}
+	result, err := host.Execute(t.Context(), query, playground.ExecuteOptions{
+		Params:         map[string]json.RawMessage{"html": json.RawMessage(`"<p>Fixture</p>"`)},
+		MaxOutputBytes: 1024,
+	})
+	if err != nil || result.Failure != "" || string(result.Output) != `"Fixture"` || probes.Load() != 0 {
+		t.Fatalf("offline memory parse: got %+v, %v with %d browser probes", result, err, probes.Load())
 	}
 }
 
@@ -133,7 +154,7 @@ func TestDriverCleanupAfterHandledDocumentFailure(t *testing.T) {
 		})
 		server := httptest.NewServer(mux)
 		t.Cleanup(server.Close)
-		host := toolingTestHost(t, registerDocument)
+		host := toolingTestHost(t, registerHTML)
 		host.cdpOrigin = server.URL
 		host.browserCleanup = time.Second
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -225,7 +246,7 @@ func TestDriverCleanupSharesDeadlineAcrossPages(t *testing.T) {
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	host := toolingTestHost(t, registerDocument)
+	host := toolingTestHost(t, registerHTML)
 	host.cdpOrigin = server.URL
 	host.browserCleanup = 400 * time.Millisecond
 
@@ -263,7 +284,7 @@ func TestDriverCleanupSharesDeadlineAcrossPages(t *testing.T) {
 }
 
 func TestHostShutdownCapsAlreadyRunningBrowserCleanup(t *testing.T) {
-	host := toolingTestHost(t, registerDocument)
+	host := toolingTestHost(t, registerHTML)
 	host.browserCleanup = time.Hour
 	if err := host.admit(); err != nil {
 		t.Fatal(err)

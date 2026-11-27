@@ -141,12 +141,19 @@ func (h *Host) Execute(ctx context.Context, src playground.Source, options playg
 			}
 		}()
 
+		memoryDriver := newHostedMemoryDriver()
+		defer closeOwned(memoryDriver)
+
 		container := drivers.NewContainer()
-		if err := container.Register(driver); err != nil {
+		if err := container.Register(memoryDriver); err != nil {
 			return result, err
 		}
 
-		container.SetDefault(driver.Name())
+		if err := container.Register(&hostedHTMLDriver{Driver: driver}); err != nil {
+			return result, err
+		}
+
+		container.SetDefault(memoryDriver.Name())
 		ctx = container.WithContext(ctx)
 	}
 

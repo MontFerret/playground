@@ -107,28 +107,52 @@ Stop deadlines reserve 250 ms for forced termination and reaping. Cleanup
 failures use fixed stage codes. The profile is discarded with ephemeral
 container storage.
 
-## Examples
+## Hosted HTML
 
-| Example | Registrations | Host access |
+| Function | What it does | Host access |
 |---|---|---|
-| `RETURN @value` | Safe standard library | None |
-| [Product extraction](../examples/products.fql) | Restricted HTML DOCUMENT and CDP | HTTPS Mockery origin |
+| `web::html::open(url)` | Loads a static response with the memory driver. The explicit driver name is `memory`. | HTTPS Mockery via the API's HTTP client |
+| `web::html::open(url, {driver:"cdp"})` | Loads and renders a page in an independent browser context. | HTTPS Mockery via Chromium |
+| `web::html::parse(html)` | Parses supplied string or binary HTML using the memory driver. | Offline |
+| `web::html::hover(element)`, `web::html::scroll_bottom(page)` | Operate on browser-backed values. FQL `dispatch` and `waitfor` also use their native capabilities. | Existing CDP context |
+| `web::html::screenshot(page, options)` | Captures a CDP page as binary, encoded as a base64 string in JSON. | Existing CDP context |
+| `DOCUMENT(url)` | Legacy unary CDP entry point used by [product extraction](../examples/products.fql). | HTTPS Mockery via Chromium |
 
 ```sh
 curl -fsS http://127.0.0.1:8080/api/v1/execute \
   -H 'Content-Type: application/json' \
-  -d '{"source":{"text":"RETURN @value"},"params":{"value":{"answer":42}}}'
+  -d '{"source":{"text":"LET page = web::html::parse(@html) RETURN page.title"},"params":{"html":"<title>Fixture</title>"}}'
 python3 -c 'import json,pathlib; print(json.dumps({"source":{"text":pathlib.Path("examples/products.fql").read_text()}}))' |
   curl -fsS http://127.0.0.1:8080/api/v1/execute \
     -H 'Content-Type: application/json' --data-binary @-
 ```
 
-The product query uses `DOCUMENT(url)`. The host accepts one HTTPS Mockery URL
-and delegates to the execution's default CDP driver. Each call opens an
-independent browser context, including successive calls in the same query.
-The native driver owns the pages, popups and cleanup. Only DOCUMENT is
-registered. Its single argument keeps cookies, init scripts and driver options
-under host control.
+Pass a CDP page and specify dimensions to bound the capture.
+
+```fql
+let page = web::html::open("https://mockery.ferretlang.org/", {driver:"cdp"})
+return web::html::screenshot(page, {format:"png", width:320, height:180})
+```
+
+The screenshot URL overload uses the memory default, so pass the CDP page when
+capturing. The default execution budget is five seconds and the result limit is
+1 MiB of encoded output, including base64 expansion. The hosted memory driver
+disables its internal backoff retries. FQL can request retries within the
+execution budget.
+
+Initial URLs must use `https://mockery.ferretlang.org` on port 443 and contain
+no embedded credentials. Native driver policies constrain redirects and
+browser requests. The memory transport verifies TLS and dials a validated
+numeric public IPv4 address using the same resolver policy as the CONNECT
+proxy. The runtime registers only the functions in the table. Direct
+`DOWNLOAD` and `web::html::download` bypass the native driver policy upstream
+and are unavailable.
+
+Each CDP open creates an independent browser context, including successive
+opens in the same query. CDP `keepCookies: true` and CDP `parse` are unavailable
+because they can use Chromium’s shared default context. The runtime owns the
+drivers per execution. The native CDP driver disposes its pages and popups
+after session settlement.
 
 Each active driver's origin policy applies to HTTP(S) traffic across the
 dedicated Chromium endpoint. All executions use the same policy. CDP Fetch
@@ -163,8 +187,10 @@ Both clean up containers, volumes, and test networks. After caching the images,
 `PLAYGROUND_USE_CACHED_IMAGES=1 make integration` skips builds and pulls.
 
 - The fixture serves the checked-in product query and controlled HTTP, TLS,
-  WebSocket, and DNS canaries. It trusts one ephemeral SPKI and resolves the
-  Mockery hostname on a private test network. Direct connections from the API
+  WebSocket, and DNS canaries. Chromium trusts the fixture's ephemeral SPKI.
+  The API image under test trusts the matching certificate through a
+  read-only mount. The fixture resolves Mockery on a private test network.
+  Direct connections from the API
   namespace establish that the canaries are reachable. The same suite exercises
   browser-UID denial for IPv4, IPv6, DNS, loopback and Unix sockets, and checks
   malformed CONNECT requests, forbidden DNS answers, and numeric-address dialing.

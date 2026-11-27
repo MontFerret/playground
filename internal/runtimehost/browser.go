@@ -3,7 +3,6 @@ package runtimehost
 import (
 	"context"
 	"errors"
-	"net/url"
 	"runtime/debug"
 	"time"
 
@@ -25,7 +24,7 @@ func NewWithBrowser(ctx context.Context, origin string, cleanup time.Duration) (
 	}
 
 	// Verify the advertised WebSocket through the relay within the startup
-	// budget. Page initialization belongs to the first DOCUMENT in each run.
+	// budget. Page initialization belongs to the first CDP open in each run.
 	chrome, err := devtool.New(origin).Version(ctx)
 	if err != nil {
 		return nil, err
@@ -42,7 +41,7 @@ func NewWithBrowser(ctx context.Context, origin string, cleanup time.Duration) (
 
 	info, _ := debug.ReadBuildInfo()
 	version := moduleVersion(info, "github.com/MontFerret/contrib/modules/web/html")
-	html := sdk.NewModule("html", registerDocument)
+	html := sdk.NewModule("html", registerHTML)
 	h, err := newHost([]registration{{module: html, version: version}}, info)
 	if err != nil {
 		return nil, err
@@ -58,23 +57,23 @@ func newBrowserDriver(origin string) *cdp.Driver {
 	return cdp.New(cdp.WithAddress(origin), cdp.WithAllowedOrigins("https://"+egress.MockeryHost), cdp.WithManagedPageCleanup())
 }
 
-func registerDocument(boot module.Bootstrap) error {
-	return sdk.RegisterFunctions(boot.Host().Library(), sdk.Func("DOCUMENT", openDocument))
+func registerHTML(boot module.Bootstrap) error {
+	library := boot.Host().Library()
+	if err := sdk.RegisterFunctions(library, sdk.Func("DOCUMENT", openDocument)); err != nil {
+		return err
+	}
+
+	// Register the public subset without installing the upstream session hook,
+	// which would replace the request's drivers with bootstrap-owned drivers.
+	return sdk.RegisterFunctions(library.Namespace("WEB").Namespace("HTML"),
+		sdk.Func("OPEN", lib.Open),
+		sdk.Func("PARSE", lib.Parse),
+		sdk.Func("HOVER", lib.Hover),
+		sdk.Func("SCROLL_BOTTOM", lib.ScrollBottom),
+		sdk.Func("SCREENSHOT", lib.Screenshot),
+	)
 }
 
 func openDocument(ctx context.Context, value runtime.Value) (runtime.Value, error) {
-	raw, err := runtime.CastString(value)
-	if err != nil {
-		return runtime.None, err
-	}
-
-	// Fetch interception covers HTTP(S). Check the submitted URL before Chrome
-	// can interpret a local scheme or consume embedded credentials.
-	u, err := url.Parse(raw.String())
-	if err != nil || u.Scheme != "https" || u.User != nil ||
-		(u.Host != egress.MockeryHost && u.Host != egress.MockeryHost+":443") {
-		return runtime.None, errors.New("document access is unavailable")
-	}
-
-	return lib.Open(ctx, raw)
+	return lib.Open(ctx, value, runtime.NewString(cdp.DriverName))
 }

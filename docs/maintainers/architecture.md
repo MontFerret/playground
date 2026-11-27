@@ -177,10 +177,17 @@ WASM adapter.
 ## Hosted browser
 
 Hosted startup verifies discovery and connects to the advertised WebSocket
-through the private relay, then closes the probe before constructing the engine. Each execution
-then owns a native driver in its own `drivers.Container`. The first DOCUMENT
-call establishes the upstream browser-wide HTTP(S) policy. All drivers use the
-same fixed origin. Each call opens an independent disposable browser context.
+through the private relay, then closes the probe before constructing the
+engine. The host registers selected native functions directly using an SDK
+module. The upstream HTML bootstrap hook would replace the execution's
+`drivers.Container` with its shared container.
+
+Each hosted execution owns a memory and a CDP driver. The memory default
+serves static HTTP and offline parsing. Its transport applies the same
+validated IPv4 dial policy as the Chromium proxy and closes idle connections
+when the execution settles. The first CDP open establishes the upstream
+browser-wide HTTP(S) policy. Both drivers use the same fixed origin. Each
+CDP open creates an independent disposable browser context.
 The driver owns page cleanup through native result and session settlement.
 The host then closes the driver under one configured cleanup deadline. It
 disposes page contexts concurrently and closes their owner connections.
@@ -191,11 +198,14 @@ settled, even if the request has already returned a sanitized failure.
 
 During host shutdown, active and subsequent browser cleanup is capped at the
 midpoint of the remaining host cleanup budget. The rest of the budget is
-available for settling admitted work and closing the engine. HTTP supplies
-the execution deadline to DOCUMENT for navigation.
+available for settling admitted work and closing the engine. The execution
+context governs both drivers.
 
-The unary DOCUMENT function checks the submitted URL against the proxy's
-Mockery hostname and delegates to `lib.Open` using the default driver.
+The unary `DOCUMENT` function selects CDP explicitly when delegating to
+`lib.Open`. The driver adapter checks initial URLs and rejects options that
+would enter a shared browser context. Native drivers enforce the origin on
+subsequent requests. See the [hosted HTML contract](../deployment.md#hosted-html)
+for the exact registrations.
 Container egress controls also cover traffic outside CDP Fetch, including
 WebSockets. The launcher owns a new user/network namespace
 whose only usable interface is loopback. UID rules are installed inside that namespace before Chromium

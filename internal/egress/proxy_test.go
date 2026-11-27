@@ -2,12 +2,28 @@ package egress
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"net/netip"
 	"os"
 	"slices"
 	"testing"
 )
+
+func TestDialMockeryRejectsOtherDestinations(t *testing.T) {
+	for _, tc := range []struct{ network, address string }{
+		{"tcp", "mockery.ferretlang.org:80"},
+		{"tcp", "127.0.0.1:443"},
+		{"tcp", "sub.mockery.ferretlang.org:443"},
+		{"udp", MockeryHost + ":443"},
+		{"tcp6", MockeryHost + ":443"},
+	} {
+		conn, err := DialMockery(t.Context(), tc.network, tc.address)
+		if conn != nil || !errors.Is(err, errDestinationDenied) {
+			t.Errorf("%s %s: got connection %v and error %v", tc.network, tc.address, conn != nil, err)
+		}
+	}
+}
 
 func TestChromiumManagedOriginsMatchProxy(t *testing.T) {
 	data, err := os.ReadFile("../../deploy/browser/policy.json")

@@ -10,7 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/net/websocket"
+
+	"github.com/MontFerret/playground/internal/config"
 	"github.com/MontFerret/playground/internal/playground"
+	"github.com/MontFerret/playground/internal/runtimehost"
 )
 
 func TestExecuteNativeResponses(t *testing.T) {
@@ -21,6 +25,13 @@ func TestExecuteNativeResponses(t *testing.T) {
 		{"RETURN @value", `{"value":[null,{"n":9007199254740993},9223372036854775807,-9223372036854775808]}`, `[null,{"n":9007199254740993},9223372036854775807,-9223372036854775808]`, ""},
 		{"RETURN @value", "{}", "", "runtime_error"},
 		{"RETURN MISSING_FUNCTION()", "{}", "", "runtime_error"},
+		{`let name = "Ada"
+let greeting = concat("Hello, ", name)
+return greeting`, "{}", `"Hello, Ada"`, ""},
+		{`let users = [{name: "Ada", active: true}, {name: "Grace", active: false}, {name: "Linus", active: true}]
+return for user in users { filter user.active == @active return user.name }`, `{"active":true}`, `["Ada","Linus"]`, ""},
+		{`RETURN FOR link IN [{ href: "/docs/" }, { href: "/try/" }] RETURN link.href`, "{}", `["/docs/","/try/"]`, ""},
+		{`RETURN WEB::HTML::PARSE("<p>example</p>")`, "{}", "", "runtime_error"},
 	} {
 		body, err := json.Marshal(map[string]any{"source": map[string]string{"text": tc.query}, "params": json.RawMessage(tc.params)})
 		if err != nil {
@@ -44,6 +55,67 @@ func TestExecuteNativeResponses(t *testing.T) {
 			}
 		} else if value.Status != "failed" || len(value.Diagnostics) != 1 || value.Diagnostics[0].Code != tc.code || value.Diagnostics[0].Phase != "execute" {
 			t.Fatalf("unexpected failure: %s", response.Body)
+		}
+	}
+}
+
+func TestExecuteHostedOfflineHTML(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"webSocketDebuggerUrl": "ws://" + r.Host + "/probe"})
+	})
+	mux.Handle("/probe", websocket.Server{
+		Handshake: func(*websocket.Config, *http.Request) error { return nil },
+		Handler: func(conn *websocket.Conn) {
+			defer conn.Close()
+
+			var message string
+			_ = websocket.Message.Receive(conn, &message)
+		},
+	})
+	endpoint := httptest.NewServer(mux)
+	t.Cleanup(endpoint.Close)
+
+	cfg, err := config.Load(func(string) (string, bool) { return "", false })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	host, err := runtimehost.NewWithBrowser(t.Context(), endpoint.URL, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		if err := host.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+
+	handler := New(host, playground.Service{}, cfg, nil)
+	for _, tc := range []struct {
+		source, params, output string
+	}{
+		{`let page = web::html::parse(@html)
+return page.title`, `{"html":"<title>Supplied HTML</title>"}`, "Supplied HTML"},
+		{`let page = web::html::parse("<a href='https://example.com'>Example</a>")
+return page.body`, `{}`, `<a href="https://example.com">Example</a>`},
+	} {
+		body, err := json.Marshal(map[string]any{"source": map[string]string{"text": tc.source}, "params": json.RawMessage(tc.params)})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		response := toolingRequest(handler, "execute", string(body))
+		var result executionResponse
+		var output string
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || response.Code != 200 ||
+			result.Status != "ok" || len(result.Diagnostics) != 0 ||
+			json.Unmarshal(result.Output, &output) != nil || output != tc.output {
+			t.Fatalf("%s: %d %s, %v", tc.source, response.Code, response.Body, err)
 		}
 	}
 }
